@@ -1,0 +1,320 @@
+module NationalAirTrafficControl {
+
+    // ─── Constants ─────────────────────────────────────────
+
+    const uint32 MAX_ID_LEN = 64;
+    const uint32 MAX_TAIL_NUMBER_LEN = 16;
+    const uint32 MAX_CONTROLLER_ID_LEN = 32;
+    const uint32 MAX_INSTRUCTION_ID_LEN = 64;
+    const uint32 MAX_CALLSIGN_LEN = 16;
+    const uint32 MAX_AIRPORT_CODE_LEN = 8;
+    const uint32 MAX_RUNWAY_ID_LEN = 16;
+    const uint32 MAX_WAYPOINT_NAME_LEN = 16;
+    const uint32 MAX_TEXT_LEN = 256;
+    const uint32 MAX_ROUTE_POINTS = 128;
+    const uint32 MAX_INVOLVED_AIRCRAFT = 16;
+
+    // ─── Type Aliases ──────────────────────────────────────
+
+    typedef string<MAX_ID_LEN> IdString;
+    typedef string<MAX_TAIL_NUMBER_LEN> TailNumber;
+    typedef string<MAX_CONTROLLER_ID_LEN> ControllerId;
+    typedef string<MAX_INSTRUCTION_ID_LEN> InstructionId;
+    typedef string<MAX_CALLSIGN_LEN> Callsign;
+    typedef string<MAX_AIRPORT_CODE_LEN> AirportCode;
+    typedef string<MAX_RUNWAY_ID_LEN> RunwayId;
+    typedef string<MAX_WAYPOINT_NAME_LEN> WaypointName;
+    typedef string<MAX_TEXT_LEN> ShortText;
+    typedef int64 Timestamp;
+
+    // ─── Nested Helper Types ───────────────────────────────
+
+    @nested
+    @appendable
+    struct GeoPosition {
+        double latitude;
+        double longitude;
+        double altitude_feet;
+    };
+
+    @nested
+    @appendable
+    struct Wind {
+        uint16 direction_degrees;
+        float speed_knots;
+        @optional float gust_knots;
+    };
+
+    @nested
+    @appendable
+    struct Waypoint {
+        WaypointName name;
+        GeoPosition position;
+        @optional Timestamp estimated_time;
+    };
+
+    // ─── Enumerations ──────────────────────────────────────
+
+    @appendable
+    enum FlightPhase {
+        PREFLIGHT,
+        TAXI_OUT,
+        TAKEOFF,
+        CLIMB,
+        CRUISE,
+        DESCENT,
+        APPROACH,
+        LANDING,
+        TAXI_IN,
+        PARKED,
+        HOLDING
+    };
+
+    @appendable
+    enum InstructionType {
+        HEADING,
+        ALTITUDE,
+        SPEED,
+        CLEARANCE,
+        HOLD,
+        GO_AROUND,
+        TAXI,
+        PUSHBACK
+    };
+
+    @appendable
+    enum AcknowledgmentStatus {
+        RECEIVED,
+        WILCO,
+        UNABLE,
+        READBACK_CORRECT,
+        READBACK_INCORRECT
+    };
+
+    @appendable
+    enum FlightPlanStatus {
+        FILED,
+        ACTIVE,
+        AMENDED,
+        DELAYED,
+        CANCELLED,
+        COMPLETED
+    };
+
+    @appendable
+    enum RunwayOperationalStatus {
+        OPEN,
+        CLOSED,
+        OCCUPIED
+    };
+
+    @appendable
+    enum WeatherCondition {
+        VMC,
+        IMC,
+        RAIN,
+        SNOW,
+        FOG,
+        THUNDERSTORM,
+        WIND_SHEAR,
+        ICE
+    };
+
+    @appendable
+    enum HandoffStatus {
+        INITIATED,
+        ACCEPTED,
+        REJECTED,
+        COMPLETED,
+        CANCELLED
+    };
+
+    @appendable
+    enum AlertSeverity {
+        INFO,
+        CAUTION,
+        WARNING,
+        CRITICAL
+    };
+
+    @appendable
+    enum AlertType {
+        EMERGENCY,
+        TRAFFIC_CONFLICT,
+        WEATHER_HAZARD,
+        RUNWAY_INCURSION,
+        COMMUNICATION_LOSS,
+        SYSTEM_FAILURE
+    };
+
+    @appendable
+    enum FacilityType {
+        TOWER,
+        TRACON,
+        CENTER,
+        NATIONAL
+    };
+
+    @appendable
+    enum GateAssignmentStatusKind {
+        PENDING,
+        ASSIGNED,
+        REJECTED,
+        RELEASED
+    };
+
+    // ─── Pub/Sub Topic Types ───────────────────────────────
+
+    @topic
+    @mutable
+    struct AircraftPosition {
+        @key TailNumber tail_number;
+        Callsign callsign;
+        GeoPosition position;
+        float ground_speed_knots;
+        float vertical_speed_fpm;
+        float heading_degrees;
+        FlightPhase flight_phase;
+        AirportCode origin_airport;
+        AirportCode destination_airport;
+        float fuel_level_percent;
+        @optional RunwayId assigned_runway;
+        Timestamp timestamp;
+    };
+
+    @topic
+    @mutable
+    struct ControllerInstruction {
+        @key InstructionId instruction_id;
+        ControllerId controller_id;
+        TailNumber tail_number;
+        InstructionType instruction_type;
+        @optional float assigned_heading_degrees;
+        @optional int32 assigned_altitude_feet;
+        @optional float assigned_speed_knots;
+        @optional ShortText clearance_text;
+        @optional ShortText taxi_route;
+        @optional ShortText hold_reason;
+        Timestamp issued_at;
+    };
+
+    @topic
+    @mutable
+    struct PilotAcknowledgment {
+        @key IdString acknowledgment_id;
+        InstructionId instruction_id;
+        TailNumber tail_number;
+        AcknowledgmentStatus status;
+        @optional ShortText response_text;
+        Timestamp acknowledged_at;
+    };
+
+    @topic
+    @mutable
+    struct FlightPlan {
+        @key IdString flight_plan_id;
+        TailNumber tail_number;
+        Callsign callsign;
+        AirportCode departure_airport;
+        AirportCode arrival_airport;
+        sequence<Waypoint, MAX_ROUTE_POINTS> waypoints;
+        Timestamp scheduled_departure_time;
+        @optional Timestamp estimated_departure_time;
+        @optional Timestamp scheduled_arrival_time;
+        @optional Timestamp estimated_arrival_time;
+        FlightPlanStatus status;
+        Timestamp last_updated;
+    };
+
+    @topic
+    @mutable
+    struct RunwayStatus {
+        @key AirportCode airport_code;
+        @key RunwayId runway_id;
+        RunwayOperationalStatus status;
+        @optional ShortText remarks;
+        Timestamp timestamp;
+    };
+
+    @topic
+    @mutable
+    struct WeatherReport {
+        @key AirportCode airport_code;
+        Wind wind;
+        float visibility_meters;
+        int32 ceiling_feet;
+        float temperature_celsius;
+        float altimeter_hpa;
+        WeatherCondition conditions;
+        Timestamp observation_time;
+    };
+
+    @topic
+    @mutable
+    struct Handoff {
+        @key IdString handoff_id;
+        TailNumber tail_number;
+        ControllerId from_controller_id;
+        ControllerId to_controller_id;
+        HandoffStatus status;
+        @optional FacilityType from_facility_type;
+        @optional FacilityType to_facility_type;
+        @optional ShortText sector;
+        @optional ShortText frequency;
+        Timestamp initiated_at;
+        @optional Timestamp completed_at;
+    };
+
+    @topic
+    @mutable
+    struct Alert {
+        @key IdString alert_id;
+        AlertType alert_type;
+        AlertSeverity severity;
+        sequence<TailNumber, MAX_INVOLVED_AIRCRAFT> involved_aircraft;
+        @optional AirportCode airport_code;
+        @optional RunwayId runway_id;
+        ShortText message;
+        Timestamp timestamp;
+    };
+
+    // ─── Request/Reply Types ───────────────────────────────
+
+    @mutable
+    struct FlightPlanRequest {
+        FlightPlan plan;
+    };
+
+    @mutable
+    struct FlightPlanResponse {
+        @key IdString flight_plan_id;
+        boolean accepted;
+        @optional ShortText message;
+        Timestamp response_timestamp;
+    };
+
+    @mutable
+    struct GateRequest {
+        @key TailNumber flight_id;
+        AirportCode aerodrome_id;
+        Timestamp requested_timestamp;
+        boolean requires_assignment;
+    };
+
+    @nested
+    @appendable
+    struct GateAssignment {
+        TailNumber flight_id;
+        string<16> gate_name;
+        GateAssignmentStatusKind status;
+        Timestamp assignment_timestamp;
+        @optional ShortText message;
+    };
+
+    @mutable
+    struct GateAssignmentReply {
+        @key TailNumber flight_id;
+        GateAssignment assignment;
+    };
+
+};

@@ -1,0 +1,8 @@
+# RTI Connext DDS ATC Demo — Python Dependencies
+#
+# The rti-connext package is installed separately from the Connext
+# installation wheel (see setup_env.sh). Only additional third-party
+# dependencies are listed here.
+
+# Web dashboard
+flask>=3.0
