@@ -18,6 +18,7 @@ import rti.connextdds as dds
 from air_traffic import NationalAirTrafficControl as ATC
 
 AircraftPosition = ATC.AircraftPosition
+AircraftTracking = ATC.AircraftTracking
 Alert = ATC.Alert
 AlertSeverity = ATC.AlertSeverity
 AlertType = ATC.AlertType
@@ -156,6 +157,13 @@ class TowerController:
             reader_qos(self.qos_provider, "StateDataProfile"),
         )
 
+        # AircraftTracking writer — publishes current controller of record
+        tracking_topic = dds.Topic(self.participant, "AircraftTracking", AircraftTracking)
+        self.tracking_writer = dds.DataWriter(
+            self.publisher, tracking_topic,
+            writer_qos(self.qos_provider, "StateDataProfile"),
+        )
+
         # Publish initial runway status
         self._publish_runway_status("09L", RunwayOperationalStatus.OPEN)
         self._publish_runway_status("27R", RunwayOperationalStatus.OPEN)
@@ -198,7 +206,12 @@ class TowerController:
     def monitor_traffic(self):
         """Read aircraft positions and track local traffic."""
         for sample in self.pos_reader.take_data():
-            self.tracked_aircraft[sample.tail_number] = sample
+            tail = sample.tail_number
+            is_new = tail not in self.tracked_aircraft
+            self.tracked_aircraft[tail] = sample
+            # First time seeing a departing aircraft → we are the initial controller
+            if is_new and sample.origin_airport == self.airport_code and tail not in self.handed_off:
+                self._publish_tracking(tail)
 
         if self.tracked_aircraft:
             log.info("Tracking %d aircraft", len(self.tracked_aircraft))
@@ -221,7 +234,7 @@ class TowerController:
             if (pos.origin_airport == self.airport_code
                     and pos.position.altitude_feet >= 1500
                     and pos.vertical_speed_fpm > 0):
-                tracon_id = f"APP-{self.airport_code}"
+                tracon_id = f"APP-{self.serving_tracon}" if self.serving_tracon else f"APP-{self.airport_code}"
                 ho = Handoff(
                     handoff_id=make_id("HO-"),
                     tail_number=ac_id,
@@ -234,6 +247,7 @@ class TowerController:
                     initiated_at=now_ms(),
                 )
                 self.ho_writer.write(ho)
+                self._unregister_tracking(ac_id)
                 self.handed_off.add(ac_id)
                 log.info("Handoff %s → TRACON (departing, %.0fft)", ac_id, pos.position.altitude_feet)
 
@@ -272,6 +286,32 @@ class TowerController:
                     completed_at=now_ms(),
                 )
                 self.ho_writer.write(accept)
+                self._publish_tracking(sample.tail_number)
+
+    # ── AircraftTracking lifecycle ─────────────────────────────────────
+
+    def _publish_tracking(self, tail_number: str):
+        """Publish that we are now the controller of record."""
+        sample = AircraftTracking(
+            tail_number=tail_number,
+            controller_id=self.controller_id,
+            facility_id=self.airport_code,
+            facility_type=FacilityType.TOWER,
+            acquired_at=now_ms(),
+        )
+        self.tracking_writer.write(sample)
+        log.info("Tracking %s — controller of record: %s (%s)",
+                 tail_number, self.controller_id, self.airport_code)
+
+    def _unregister_tracking(self, tail_number: str):
+        """Unregister our tracking claim (hand off without disposing)."""
+        sample = AircraftTracking(tail_number=tail_number)
+        handle = self.tracking_writer.lookup_instance(sample)
+        if handle is not None and handle.is_nil is False:
+            self.tracking_writer.unregister_instance(handle)
+            log.info("Unregistered tracking for %s", tail_number)
+        else:
+            log.debug("No tracking instance to unregister for %s", tail_number)
 
     def check_weather(self):
         """Read local weather."""
@@ -307,7 +347,7 @@ def main():
     parser.add_argument("--duration", type=float, default=120.0, help="Duration in seconds")
     args = parser.parse_args()
 
-    controller_id = args.controller_id or make_id(f"TWR-{args.airport_code}-")
+    controller_id = args.controller_id or f"TWR-{args.airport_code}"
 
     tower = TowerController(
         airport_code=args.airport_code,

@@ -39,3 +39,4 @@ The atc_types should be generated from the air_traffic.idl using rtiddsgen. Also
 
 Is there a good way to show the centers and tracons, and the area they cover, in the dashboard? Is that typically disolayed in ATC dashboards?
 
+The Centers/Regions are defined in the scenario_default.json, but they layers are also hardcoded in the dashboard.py?

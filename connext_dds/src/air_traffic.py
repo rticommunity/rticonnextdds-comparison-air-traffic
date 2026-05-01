@@ -234,6 +234,7 @@ class NationalAirTrafficControl_AlertType(IntEnum):
     RUNWAY_INCURSION = 3
     COMMUNICATION_LOSS = 4
     SYSTEM_FAILURE = 5
+    UNAUTHORIZED_ENTRY = 6
 
 NationalAirTrafficControl.AlertType = NationalAirTrafficControl_AlertType
 
@@ -454,6 +455,25 @@ class NationalAirTrafficControl_Alert:
     timestamp: int = 0
 
 NationalAirTrafficControl.Alert = NationalAirTrafficControl_Alert
+
+@idl.struct(
+    type_annotations = [idl.mutable, idl.type_name("NationalAirTrafficControl::AircraftTracking"), ],
+
+    member_annotations = {
+        'tail_number': [idl.key, idl.bound(NationalAirTrafficControl.MAX_TAIL_NUMBER_LEN),],
+        'controller_id': [idl.bound(NationalAirTrafficControl.MAX_CONTROLLER_ID_LEN),],
+        'facility_id': [idl.bound(NationalAirTrafficControl.MAX_TEXT_LEN),],
+        'facility_type': [idl.default(0),],
+    }
+)
+class NationalAirTrafficControl_AircraftTracking:
+    tail_number: str = ""
+    controller_id: str = ""
+    facility_id: str = ""
+    facility_type: NationalAirTrafficControl.FacilityType = NationalAirTrafficControl.FacilityType.TOWER
+    acquired_at: int = 0
+
+NationalAirTrafficControl.AircraftTracking = NationalAirTrafficControl_AircraftTracking
 
 @idl.struct(
     type_annotations = [idl.mutable, idl.type_name("NationalAirTrafficControl::FlightPlanRequest"), ])

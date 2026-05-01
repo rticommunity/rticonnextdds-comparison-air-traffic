@@ -32,6 +32,7 @@ Handoff = ATC.Handoff
 PilotAcknowledgment = ATC.PilotAcknowledgment
 RunwayStatus = ATC.RunwayStatus
 WeatherReport = ATC.WeatherReport
+AircraftTracking = ATC.AircraftTracking
 from common import (
     create_participant,
     create_subscriber,
@@ -50,6 +51,7 @@ TOPIC_MAP = {
     "WeatherReport": (WeatherReport, "StateDataProfile"),
     "Handoff": (Handoff, "HandoffProfile"),
     "Alert": (Alert, "AlertBroadcastProfile"),
+    "AircraftTracking": (AircraftTracking, "StateDataProfile"),
 }
 
 MAX_EVENTS = 100
@@ -93,6 +95,9 @@ state = {
     "acks": [],
     "events": [],
     "counters": defaultdict(int),
+    "tracking": {},
+    "handoff_log": deque(maxlen=50),
+    "pending_pulses": [],
 }
 
 
@@ -176,6 +181,15 @@ def ack_dict(s):
     }
 
 
+def tracking_dict(s):
+    return {
+        "tail_number": s.tail_number,
+        "controller_id": s.controller_id,
+        "facility_id": s.facility_id,
+        "facility_type": s.facility_type.name,
+    }
+
+
 # ── DDS polling thread ─────────────────────────────────────────────────────
 
 def dds_poll_loop(readers, interval=0.25):
@@ -213,7 +227,13 @@ def dds_poll_loop(readers, interval=0.25):
                         _event(f"\U0001f6a8 {sample.severity.name} "
                                f"{sample.alert_type.name}: {sample.message}")
                     elif topic_name == "Handoff":
-                        state["handoffs"].append(handoff_dict(sample))
+                        hd = handoff_dict(sample)
+                        state["handoffs"].append(hd)
+                        state["handoff_log"].append(hd)
+                        if sample.status == ATC.HandoffStatus.ACCEPTED and sample.to_facility_type is not None:
+                            if sample.to_facility_type == ATC.FacilityType.CENTER:
+                                state["pending_pulses"].append(
+                                    sample.to_controller_id.replace("CTR-", "", 1))
                         ft = ""
                         if sample.from_facility_type is not None and sample.to_facility_type is not None:
                             ft = f" [{sample.from_facility_type.name}→{sample.to_facility_type.name}]"
@@ -226,6 +246,8 @@ def dds_poll_loop(readers, interval=0.25):
                     elif topic_name == "PilotAcknowledgment":
                         state["acks"].append(ack_dict(sample))
                         _event(f"\u2705 ACK {sample.tail_number} {sample.status.name}")
+                    elif topic_name == "AircraftTracking":
+                        state["tracking"][sample.tail_number] = tracking_dict(sample)
         time.sleep(interval)
 
 
@@ -244,6 +266,8 @@ def _snapshot():
     """Return a JSON-serialisable snapshot of the current state."""
     with state_lock:
         trails = {aid: list(pts) for aid, pts in state["trails"].items()}
+        pulses = list(state["pending_pulses"])
+        state["pending_pulses"].clear()
         return {
             "positions": list(state["positions"].values()),
             "trails": trails,
@@ -253,6 +277,9 @@ def _snapshot():
             "alerts": state["alerts"][-20:],
             "events": state["events"][:50],
             "counters": dict(state["counters"]),
+            "tracking": dict(state["tracking"]),
+            "handoff_log": list(state["handoff_log"]),
+            "pulse_centers": pulses,
             "kpi": {
                 "aircraft": len(state["positions"]),
                 "flight_plans": len(state["flight_plans"]),
@@ -479,6 +506,30 @@ tr.selected td { background: rgba(78,168,222,0.18); }
   border: none; border-radius: 3px; padding: 1px 4px; box-shadow: 0 1px 4px rgba(0,0,0,0.5);
 }
 .waypoint-tooltip::before { border-top-color: rgba(0,229,255,0.85) !important; }
+
+/* ── Handoff log ───────────────────────────────────────────────────────── */
+#handoff-log { max-height: 200px; overflow-y: auto; font-size: 0.72rem;
+              background: var(--surface); border: 1px solid var(--border);
+              border-radius: 6px; padding: 6px; }
+.ho { padding: 3px 0; border-bottom: 1px solid rgba(45,49,64,0.5);
+     display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.ho-status { font-size: 0.65rem; font-weight: 700; padding: 1px 5px;
+            border-radius: 3px; text-transform: uppercase; }
+.ho-INITIATED { background: rgba(78,168,222,0.2); color: var(--accent); }
+.ho-ACCEPTED  { background: rgba(76,175,80,0.2); color: var(--green); }
+.ho-REJECTED  { background: rgba(244,67,54,0.2); color: var(--red); }
+.ho-COMPLETED { background: rgba(0,229,255,0.2); color: var(--cyan); }
+.ho-CANCELLED { background: rgba(136,136,136,0.2); color: var(--dim); }
+.ho-tail { font-weight: 700; color: var(--text); min-width: 60px; }
+.ho-flow { color: var(--dim); font-family: monospace; font-size: 0.68rem; }
+.ho-facility { font-size: 0.6rem; color: var(--dim); }
+
+/* ── Center colour legend ──────────────────────────────────────────────── */
+#center-legend { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.legend-chip { display: inline-flex; align-items: center; gap: 3px;
+              font-size: 0.65rem; padding: 1px 6px; border-radius: 3px;
+              background: var(--surface2); border: 1px solid var(--border); }
+.legend-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
 </style>
 </head>
 <body>
@@ -550,6 +601,18 @@ tr.selected td { background: rgba(78,168,222,0.18); }
     <div id="alerts-box"></div>
   </div>
 
+  <!-- Handoff Log -->
+  <div class="section">
+    <div class="section-hdr">&#128260; Handoff Log <span class="badge" id="ho-count">0</span></div>
+    <div id="handoff-log"><div class="empty">No handoffs yet</div></div>
+  </div>
+
+  <!-- Center Legend -->
+  <div class="section">
+    <div class="section-hdr">Controller Colours</div>
+    <div id="center-legend"></div>
+  </div>
+
   <!-- Event feed -->
   <div class="section">
     <div class="section-hdr">Live Feed</div>
@@ -604,15 +667,31 @@ var NM_TO_METERS = 1852;
 var centerLayer = L.layerGroup();
 var traconLayer = L.layerGroup();
 
+/* ── Center colour palette ─────────────────────────────────────── */
+var CENTER_COLORS = {};
+var _centerPalette = [
+  "#FF6B6B","#4ECDC4","#45B7D1","#96CEB4","#FFEAA7",
+  "#DDA0DD","#98D8C8","#F7DC6F","#BB8FCE","#85C1E9",
+  "#F8C471","#82E0AA","#F1948A","#AED6F1","#D7BDE2",
+  "#A3E4D7","#FAD7A0","#ABEBC6","#D2B4DE","#AEB6BF"
+];
+CENTERS.forEach(function(c, i) {
+  CENTER_COLORS[c.id] = _centerPalette[i % _centerPalette.length];
+});
+
+var centerPolygons = {};
+
 CENTERS.forEach(function(c) {
+  var color = CENTER_COLORS[c.id] || "#4fc3f7";
   var poly = L.polygon(c.boundary, {
-    color: "#4fc3f7", weight: 1.5, opacity: 0.6,
-    fillColor: "#4fc3f7", fillOpacity: 0.04,
+    color: color, weight: 1.5, opacity: 0.6,
+    fillColor: color, fillOpacity: 0.04,
     dashArray: "6 4", bubblingMouseEvents: false
   });
   poly.bindTooltip(c.id + " — " + c.name, { sticky: true, className: "airspace-tooltip" });
   poly.on('click', function(e) { L.DomEvent.stopPropagation(e); });
   centerLayer.addLayer(poly);
+  centerPolygons[c.id] = poly;
 });
 
 TRACONS.forEach(function(t) {
@@ -633,6 +712,9 @@ L.control.layers(null, {
   "ARTCC (Centers)": centerLayer,
   "TRACON": traconLayer
 }, { position: "bottomleft", collapsed: false }).addTo(map);
+
+/* ── Build center colour legend in panel ─────────────────────────── */
+buildCenterLegend();
 
 /* ── Airport markers (created dynamically when seen in data) ─────── */
 var airportMarkers = {};
@@ -661,8 +743,7 @@ function aircraftSvg(heading, color) {
   return 'data:image/svg+xml;base64,' + btoa(svg);
 }
 
-function makeAircraftIcon(heading, phase) {
-  var color = PHASE_COLOR[phase] || "#4ea8de";
+function makeAircraftIcon(heading, color) {
   return L.icon({
     iconUrl: aircraftSvg(heading, color),
     iconSize: [32, 32],
@@ -758,13 +839,61 @@ function selectAircraft(aircraftId) {
   if (aircraftMarkers[aircraftId]) aircraftMarkers[aircraftId].openPopup();
 }
 
+/* ── Center pulse ────────────────────────────────────────────────── */
+function pulseCenter(centerId) {
+  var poly = centerPolygons[centerId];
+  if (!poly) return;
+  var c = CENTER_COLORS[centerId] || "#4fc3f7";
+  poly.setStyle({ fillColor: c, fillOpacity: 0.30, color: c, weight: 3, opacity: 1.0 });
+  setTimeout(function() {
+    poly.setStyle({ fillColor: c, fillOpacity: 0.04, color: c, weight: 1.5, opacity: 0.6 });
+  }, 1500);
+}
+
+/* ── Handoff log renderer ────────────────────────────────────────── */
+function renderHandoffLog(entries) {
+  var el = document.getElementById("handoff-log");
+  document.getElementById("ho-count").textContent = entries.length;
+  if (!entries.length) { el.innerHTML = '<div class="empty">No handoffs yet</div>'; return; }
+  var rows = entries.slice(-30).reverse().map(function(h) {
+    return '<div class="ho">' +
+      '<span class="ho-tail">' + h.tail_number + '</span>' +
+      '<span class="ho-flow">' + h.from + ' &rarr; ' + h.to + '</span>' +
+      '<span class="ho-status ho-' + h.status + '">' + h.status + '</span>' +
+      (h.from_facility || h.to_facility ?
+        '<span class="ho-facility">[' + (h.from_facility||'?') + '&rarr;' + (h.to_facility||'?') + ']</span>' : '') +
+      '</div>';
+  }).join("");
+  el.innerHTML = rows;
+}
+
+/* ── Center legend builder ───────────────────────────────────────── */
+function buildCenterLegend() {
+  var el = document.getElementById("center-legend");
+  el.innerHTML = CENTERS.map(function(c) {
+    var col = CENTER_COLORS[c.id] || "#4fc3f7";
+    return '<span class="legend-chip"><span class="legend-dot" style="background:' + col + '"></span>' + c.id + '</span>';
+  }).join("");
+}
+
 /* ── Render helpers ──────────────────────────────────────────────── */
-function renderAircraft(positions, trails) {
+function renderAircraft(positions, trails, tracking) {
   var seen = {};
+  tracking = tracking || {};
   positions.forEach(function(ac) {
     seen[ac.tail_number] = true;
     var ll = [ac.lat, ac.lon];
-    var color = PHASE_COLOR[ac.phase] || "#4ea8de";
+    var trk = tracking[ac.tail_number];
+    var color;
+    if (trk && trk.facility_type === "CENTER" && CENTER_COLORS[trk.facility_id]) {
+      color = CENTER_COLORS[trk.facility_id];
+    } else if (trk && trk.facility_type === "TRACON") {
+      color = "#ffb74d";
+    } else if (trk && trk.facility_type === "TOWER") {
+      color = "#4caf50";
+    } else {
+      color = PHASE_COLOR[ac.phase] || "#4ea8de";
+    }
 
     // Ensure origin/dest airport markers exist
     ensureAirportMarker(ac.origin);
@@ -773,17 +902,18 @@ function renderAircraft(positions, trails) {
     // Marker
     if (aircraftMarkers[ac.tail_number]) {
       aircraftMarkers[ac.tail_number].setLatLng(ll);
-      aircraftMarkers[ac.tail_number].setIcon(makeAircraftIcon(ac.heading, ac.phase));
+      aircraftMarkers[ac.tail_number].setIcon(makeAircraftIcon(ac.heading, color));
     } else {
-      var m = L.marker(ll, { icon: makeAircraftIcon(ac.heading, ac.phase), zIndexOffset: 200 }).addTo(map);
+      var m = L.marker(ll, { icon: makeAircraftIcon(ac.heading, color), zIndexOffset: 200 }).addTo(map);
       m.bindPopup("");
       (function(aid) { m.on("click", function() { selectAircraft(aid); }); })(ac.tail_number);
       aircraftMarkers[ac.tail_number] = m;
     }
     // Update popup lazily
+    var ctrlLine = trk ? "<br><strong style='color:" + color + "'>" + trk.controller_id + "</strong> (" + trk.facility_type + ")" : "";
     aircraftMarkers[ac.tail_number].getPopup().setContent(
       "<strong>" + ac.callsign + "</strong> (" + ac.tail_number + ")<br>" +
-      '<span class="phase phase-' + ac.phase + '">' + ac.phase + "</span><br>" +
+      '<span class="phase phase-' + ac.phase + '">' + ac.phase + "</span>" + ctrlLine + "<br>" +
       "Alt: " + ac.alt_ft.toLocaleString() + " ft &bull; " + ac.speed_kt + " kt<br>" +
       "Hdg: " + ac.heading + "&deg; &bull; Fuel: " + ac.fuel_pct + "%<br>" +
       ac.origin + " &rarr; " + ac.dest
@@ -804,11 +934,12 @@ function renderAircraft(positions, trails) {
       }).addTo(map);
       aircraftLabels[ac.tail_number] = lbl;
     }
-    // Update label text (callsign + FL)
+    // Update label text (callsign + FL + controller)
+    var ctrlTag = trk ? ' \u00b7 ' + trk.facility_id : '';
     aircraftLabels[ac.tail_number].setIcon(L.divIcon({
       className: "",
-      html: '<div class="aircraft-label">' + ac.callsign + ' FL' + String(Math.round(ac.alt_ft/100)).padStart(3,'0') + '</div>',
-      iconSize: [110, 18],
+      html: '<div class="aircraft-label" style="border-color:' + color + '80">' + ac.callsign + ' FL' + String(Math.round(ac.alt_ft/100)).padStart(3,'0') + ctrlTag + '</div>',
+      iconSize: [130, 18],
       iconAnchor: [-8, 20]
     }));
 
@@ -886,7 +1017,7 @@ function update(d) {
   document.getElementById("kpi-alerts").textContent = d.kpi.total_alerts;
 
   // Map
-  renderAircraft(d.positions, d.trails);
+  renderAircraft(d.positions, d.trails, d.tracking);
   updateAirportWeather(d.weather);
 
   // Aircraft table
@@ -952,10 +1083,16 @@ function update(d) {
     ev.innerHTML = d.events.map(function(e) { return '<div class="ev">' + e + "</div>"; }).join("");
   } else { ev.innerHTML = '<div class="empty">Waiting for DDS data&hellip;</div>'; }
 
+  // Handoff log
+  if (d.handoff_log) renderHandoffLog(d.handoff_log);
+
+  // Pulse centers on handoff accept
+  if (d.pulse_centers) d.pulse_centers.forEach(function(cid) { pulseCenter(cid); });
+
   // Counters
   var ct = document.getElementById("counters-table");
   var names = ["AircraftPosition","ControllerInstruction","PilotAcknowledgment",
-               "FlightPlan","RunwayStatus","WeatherReport","Handoff","Alert"];
+               "FlightPlan","RunwayStatus","WeatherReport","Handoff","Alert","AircraftTracking"];
   ct.innerHTML = names.map(function(n) {
     return "<tr><td>" + n + "</td><td>" + (d.counters[n] || 0) + "</td></tr>";
   }).join("");

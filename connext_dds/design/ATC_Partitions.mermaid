@@ -1,0 +1,48 @@
+graph TB
+    classDef svc fill:#f3e5f5,stroke:#9c27b0,stroke-width:2
+    classDef enr fill:#fff3e0,stroke:#ff9800,stroke-width:2
+    classDef trm fill:#e3f2fd,stroke:#2196f3,stroke-width:2
+    classDef apt fill:#e8f5e9,stroke:#4caf50,stroke-width:2
+    classDef ac  fill:#fce4ec,stroke:#e91e63,stroke-width:2
+
+    FPS(["FPS 'main'<br/><i>OPS/FPS/main</i>"]):::svc
+
+    ZNY["Center ZNY<br/><i>ENROUTE/ZNY · ENROUTE/* · FPS/*</i>"]:::enr
+    ZLA["Center ZLA<br/><i>ENROUTE/ZLA · ENROUTE/* · FPS/*</i>"]:::enr
+
+    N90["TRACON N90<br/><i>TERMINAL/N90 · FPS/*</i><br/><i>↑ ENROUTE/ZNY</i>"]:::trm
+    SCT["TRACON SCT<br/><i>TERMINAL/SCT · FPS/*</i><br/><i>↑ ENROUTE/ZLA</i>"]:::trm
+
+    TWR_JFK["Tower KJFK<br/><i>AIRPORT/KJFK · FPS/*</i><br/><i>↑ TERMINAL/N90</i>"]:::apt
+    APT_JFK["Airport KJFK<br/><i>AIRPORT/KJFK</i><br/><i>↑ TERMINAL/N90</i>"]:::apt
+    TWR_LAX["Tower KLAX<br/><i>AIRPORT/KLAX · FPS/*</i><br/><i>↑ TERMINAL/SCT</i>"]:::apt
+    APT_LAX["Airport KLAX<br/><i>AIRPORT/KLAX</i><br/><i>↑ TERMINAL/SCT</i>"]:::apt
+
+    AC{{"✈ N12345 (KJFK → KLAX)<br/><i>FPS/* · TERMINAL/* · ENROUTE/*</i><br/><i>AIRPORT/KJFK · AIRPORT/KLAX</i>"}}:::ac
+
+    %% Reach-up hierarchy (solid) — concrete ↔ concrete
+    TWR_JFK -->|"TERMINAL/N90"| N90
+    APT_JFK -->|"TERMINAL/N90"| N90
+    TWR_LAX -->|"TERMINAL/SCT"| SCT
+    APT_LAX -->|"TERMINAL/SCT"| SCT
+    N90 -->|"ENROUTE/ZNY"| ZNY
+    SCT -->|"ENROUTE/ZLA"| ZLA
+
+    %% Aircraft discovery (dashed) — wildcard ↔ concrete
+    AC -.->|"AIRPORT/KJFK"| TWR_JFK
+    AC -.->|"AIRPORT/KJFK"| APT_JFK
+    AC -.->|"AIRPORT/KLAX"| TWR_LAX
+    AC -.->|"AIRPORT/KLAX"| APT_LAX
+    AC -.->|"TERMINAL/*"| N90
+    AC -.->|"TERMINAL/*"| SCT
+    AC -.->|"ENROUTE/*"| ZNY
+    AC -.->|"ENROUTE/*"| ZLA
+
+    %% FPS service links (thick) — FPS/main ↔ FPS/*
+    FPS ==>|"FPS/*"| AC
+    FPS ==>|"FPS/*"| TWR_JFK
+    FPS ==>|"FPS/*"| TWR_LAX
+    FPS ==>|"FPS/*"| N90
+    FPS ==>|"FPS/*"| SCT
+    FPS ==>|"FPS/*"| ZNY
+    FPS ==>|"FPS/*"| ZLA

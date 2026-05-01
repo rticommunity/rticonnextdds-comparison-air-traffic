@@ -144,7 +144,8 @@ module NationalAirTrafficControl {
         WEATHER_HAZARD,
         RUNWAY_INCURSION,
         COMMUNICATION_LOSS,
-        SYSTEM_FAILURE
+        SYSTEM_FAILURE,
+        UNAUTHORIZED_ENTRY
     };
 
     @appendable
@@ -276,6 +277,19 @@ module NationalAirTrafficControl {
         @optional RunwayId runway_id;
         ShortText message;
         Timestamp timestamp;
+    };
+
+    // AircraftTracking — current controller of record for each aircraft.
+    // Keyed by tail_number; KEEP_LAST 1 + TRANSIENT_LOCAL ensures one
+    // authoritative truth per aircraft available to late joiners.
+    @topic
+    @mutable
+    struct AircraftTracking {
+        @key TailNumber tail_number;
+        ControllerId controller_id;
+        ShortText facility_id;          // e.g. "ZNY", "N90", "KJFK"
+        FacilityType facility_type;
+        Timestamp acquired_at;
     };
 
     // ─── Request/Reply Types ───────────────────────────────

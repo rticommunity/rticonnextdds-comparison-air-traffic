@@ -22,6 +22,7 @@ import rti.connextdds as dds
 from air_traffic import NationalAirTrafficControl as ATC
 
 AircraftPosition = ATC.AircraftPosition
+AircraftTracking = ATC.AircraftTracking
 Alert = ATC.Alert
 AlertSeverity = ATC.AlertSeverity
 AlertType = ATC.AlertType
@@ -85,6 +86,7 @@ class TraconController:
         self.tracon_id = tracon_id
         self.controller_id = controller_id
         self.airport_codes = airport_codes
+        self.serving_center = serving_center
         self.tracked_aircraft: dict[str, AircraftPosition] = {}
         self.handed_off: set[str] = set()  # tail numbers already handed off this cycle
 
@@ -166,6 +168,13 @@ class TraconController:
         self.fp_reader = dds.DataReader(
             self.subscriber, fp_topic,
             reader_qos(self.qos_provider, "StateDataProfile"),
+        )
+
+        # AircraftTracking writer — publishes current controller of record
+        tracking_topic = dds.Topic(self.participant, "AircraftTracking", AircraftTracking)
+        self.tracking_writer = dds.DataWriter(
+            self.publisher, tracking_topic,
+            writer_qos(self.qos_provider, "StateDataProfile"),
         )
 
         log.info(
@@ -282,20 +291,22 @@ class TraconController:
             # Departing aircraft climbing above center handoff altitude → hand to center
             if self._is_departing(pos) and alt >= self.CENTER_HANDOFF_ALT:
                 self._initiate_handoff_to_center(tail, pos)
+                self._unregister_tracking(tail)
                 self.handed_off.add(tail)
 
             # Arriving aircraft descended below tower handoff altitude → hand to tower
             elif self._is_arriving(pos) and alt <= self.TOWER_HANDOFF_ALT:
                 self._initiate_handoff_to_tower(tail, pos)
+                self._unregister_tracking(tail)
                 self.handed_off.add(tail)
 
     def _initiate_handoff_to_center(self, tail: str, pos: AircraftPosition):
-        """Hand departing aircraft off to en-route center."""
+        """Hand departing aircraft off to overlying en-route center."""
         ho = Handoff(
             handoff_id=make_id("HO-"),
             tail_number=tail,
             from_controller_id=self.controller_id,
-            to_controller_id=f"CTR-{pos.origin_airport}",  # resolved by center
+            to_controller_id=f"CTR-{self.serving_center}",  # deterministic center controller ID
             status=HandoffStatus.INITIATED,
             from_facility_type=FacilityType.TRACON,
             to_facility_type=FacilityType.CENTER,
@@ -346,6 +357,32 @@ class TraconController:
                     completed_at=now_ms(),
                 )
                 self.ho_writer.write(accept)
+                self._publish_tracking(sample.tail_number)
+
+    # ── AircraftTracking lifecycle ─────────────────────────────────────
+
+    def _publish_tracking(self, tail_number: str):
+        """Publish that we are now the controller of record."""
+        sample = AircraftTracking(
+            tail_number=tail_number,
+            controller_id=self.controller_id,
+            facility_id=self.tracon_id,
+            facility_type=FacilityType.TRACON,
+            acquired_at=now_ms(),
+        )
+        self.tracking_writer.write(sample)
+        log.info("Tracking %s — controller of record: %s (%s)",
+                 tail_number, self.controller_id, self.tracon_id)
+
+    def _unregister_tracking(self, tail_number: str):
+        """Unregister our tracking claim (hand off without disposing)."""
+        sample = AircraftTracking(tail_number=tail_number)
+        handle = self.tracking_writer.lookup_instance(sample)
+        if handle is not None and handle.is_nil is False:
+            self.tracking_writer.unregister_instance(handle)
+            log.info("Unregistered tracking for %s", tail_number)
+        else:
+            log.debug("No tracking instance to unregister for %s", tail_number)
 
     # ── Instruction helpers ────────────────────────────────────────────
 
@@ -408,7 +445,7 @@ def main():
     parser.add_argument("--duration", type=float, default=120.0, help="Duration in seconds")
     args = parser.parse_args()
 
-    controller_id = args.controller_id or make_id(f"APP-{args.tracon_id}-")
+    controller_id = args.controller_id or f"APP-{args.tracon_id}"
 
     tracon = TraconController(
         tracon_id=args.tracon_id,

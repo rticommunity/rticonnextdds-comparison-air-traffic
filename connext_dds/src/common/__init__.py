@@ -17,14 +17,71 @@ SIM_SPEED_FILE = os.path.join(os.path.dirname(__file__), "..", "..", "config", "
 SCENARIO_CONFIG = os.path.join(os.path.dirname(__file__), "..", "..", "config", "scenario_default.json")
 
 
+def _load_scenario(config_path: str = SCENARIO_CONFIG) -> dict:
+    """Load and cache the scenario JSON."""
+    with open(config_path) as f:
+        return json.load(f)
+
+
 def load_airport_coords(config_path: str = SCENARIO_CONFIG) -> dict[str, tuple[float, float]]:
     """Load airport (code → (lat, lon)) mapping from scenario config JSON."""
-    with open(config_path) as f:
-        data = json.load(f)
+    data = _load_scenario(config_path)
     return {
         a["code"]: (a["latitude"], a["longitude"])
         for a in data["airports"]
     }
+
+
+def load_center_boundaries(config_path: str = SCENARIO_CONFIG) -> dict[str, list[list[float]]]:
+    """Load center boundary polygons as dict[center_id → list of [lat, lon]]."""
+    data = _load_scenario(config_path)
+    return {c["id"]: c["boundary"] for c in data["centers"]}
+
+
+def load_tracon_for_airport(config_path: str = SCENARIO_CONFIG) -> dict[str, str]:
+    """Load mapping from airport code → TRACON id."""
+    data = _load_scenario(config_path)
+    return {a["code"]: a["serving_tracon"] for a in data["airports"] if "serving_tracon" in a}
+
+
+def load_tracon_serving_center(config_path: str = SCENARIO_CONFIG) -> dict[str, str]:
+    """Load mapping from TRACON id → serving center id."""
+    data = _load_scenario(config_path)
+    return {t["id"]: t["serving_center"] for t in data.get("tracons", []) if "serving_center" in t}
+
+
+def point_in_polygon(lat: float, lon: float, polygon: list[list[float]]) -> bool:
+    """Ray-casting point-in-polygon test. Polygon is list of [lat, lon]."""
+    n = len(polygon)
+    inside = False
+    j = n - 1
+    for i in range(n):
+        lat_i, lon_i = polygon[i]
+        lat_j, lon_j = polygon[j]
+        if ((lat_i > lat) != (lat_j > lat)) and \
+           (lon < (lon_j - lon_i) * (lat - lat_i) / (lat_j - lat_i) + lon_i):
+            inside = not inside
+        j = i
+    return inside
+
+
+def polygon_bbox(polygon: list[list[float]]) -> tuple[float, float, float, float]:
+    """Return (min_lat, max_lat, min_lon, max_lon) for a polygon of [lat, lon] points."""
+    lats = [p[0] for p in polygon]
+    lons = [p[1] for p in polygon]
+    return min(lats), max(lats), min(lons), max(lons)
+
+
+def find_center_for_position(
+    lat: float, lon: float, center_boundaries: dict[str, list[list[float]]], exclude: str = ""
+) -> str | None:
+    """Find which center contains the given position. Optionally exclude one center."""
+    for cid, boundary in center_boundaries.items():
+        if cid == exclude:
+            continue
+        if point_in_polygon(lat, lon, boundary):
+            return cid
+    return None
 
 
 def read_sim_speed() -> float:
