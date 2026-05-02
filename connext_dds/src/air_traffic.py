@@ -235,8 +235,17 @@ class NationalAirTrafficControl_AlertType(IntEnum):
     COMMUNICATION_LOSS = 4
     SYSTEM_FAILURE = 5
     UNAUTHORIZED_ENTRY = 6
+    WEATHER_DEVIATION = 7
 
 NationalAirTrafficControl.AlertType = NationalAirTrafficControl_AlertType
+
+@idl.enum
+class NationalAirTrafficControl_ConvectiveSeverity(IntEnum):
+    MODERATE = 0
+    SEVERE = 1
+    EXTREME = 2
+
+NationalAirTrafficControl.ConvectiveSeverity = NationalAirTrafficControl_ConvectiveSeverity
 
 @idl.enum
 class NationalAirTrafficControl_FacilityType(IntEnum):
@@ -256,6 +265,15 @@ class NationalAirTrafficControl_GateAssignmentStatusKind(IntEnum):
 
 NationalAirTrafficControl.GateAssignmentStatusKind = NationalAirTrafficControl_GateAssignmentStatusKind
 
+@idl.enum
+class NationalAirTrafficControl_NavStatus(IntEnum):
+    NORMAL = 0
+    WEATHER_DEVIATION = 1
+    HOLDING = 2
+    EMERGENCY = 3
+
+NationalAirTrafficControl.NavStatus = NationalAirTrafficControl_NavStatus
+
 @idl.struct(
     type_annotations = [idl.mutable, idl.type_name("NationalAirTrafficControl::AircraftPosition"), ],
 
@@ -266,6 +284,7 @@ NationalAirTrafficControl.GateAssignmentStatusKind = NationalAirTrafficControl_G
         'origin_airport': [idl.bound(NationalAirTrafficControl.MAX_AIRPORT_CODE_LEN),],
         'destination_airport': [idl.bound(NationalAirTrafficControl.MAX_AIRPORT_CODE_LEN),],
         'assigned_runway': [idl.bound(NationalAirTrafficControl.MAX_RUNWAY_ID_LEN),],
+        'nav_status': [idl.default(0),],
     }
 )
 class NationalAirTrafficControl_AircraftPosition:
@@ -280,6 +299,7 @@ class NationalAirTrafficControl_AircraftPosition:
     destination_airport: str = ""
     fuel_level_percent: idl.float32 = 0.0
     assigned_runway: Optional[str] = None
+    nav_status: Optional[NationalAirTrafficControl.NavStatus] = None
     timestamp: int = 0
 
 NationalAirTrafficControl.AircraftPosition = NationalAirTrafficControl_AircraftPosition
@@ -492,6 +512,28 @@ class NationalAirTrafficControl_FacilityStatus:
     last_updated: int = 0
 
 NationalAirTrafficControl.FacilityStatus = NationalAirTrafficControl_FacilityStatus
+
+@idl.struct(
+    type_annotations = [idl.mutable, idl.type_name("NationalAirTrafficControl::ConvectiveCell"), ],
+
+    member_annotations = {
+        'cell_id': [idl.key, idl.bound(NationalAirTrafficControl.MAX_ID_LEN),],
+        'severity': [idl.default(0),],
+    }
+)
+class NationalAirTrafficControl_ConvectiveCell:
+    cell_id: str = ""
+    center_latitude: float = 0.0
+    center_longitude: float = 0.0
+    radius_nm: float = 0.0
+    top_altitude_ft: idl.int32 = 0
+    base_altitude_ft: idl.int32 = 0
+    severity: NationalAirTrafficControl.ConvectiveSeverity = NationalAirTrafficControl.ConvectiveSeverity.MODERATE
+    movement_heading_deg: idl.float32 = 0.0
+    movement_speed_knots: idl.float32 = 0.0
+    observation_time: int = 0
+
+NationalAirTrafficControl.ConvectiveCell = NationalAirTrafficControl_ConvectiveCell
 
 @idl.struct(
     type_annotations = [idl.mutable, idl.type_name("NationalAirTrafficControl::FlightPlanRequest"), ])

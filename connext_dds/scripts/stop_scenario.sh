@@ -21,6 +21,7 @@ declare -A APP_MAP=(
     [center]="center_app/center.py"
     [airplane]="airplane_app/airplane.py"
     [dashboard]="dashboard_app/dashboard.py"
+    [weather]="weather_service/weather_service.py"
 )
 
 # Build list of (pattern, instance_filter) pairs

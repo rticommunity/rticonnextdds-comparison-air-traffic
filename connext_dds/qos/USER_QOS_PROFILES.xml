@@ -252,6 +252,25 @@
                     </lease_duration>
                 </liveliness>
             </datareader_qos>
+
+            <!-- ConvectiveCell: 15s deadline (cells update every ~10s) -->
+            <datawriter_qos topic_filter="ConvectiveCell">
+                <deadline>
+                    <period>
+                        <sec>15</sec>
+                        <nanosec>0</nanosec>
+                    </period>
+                </deadline>
+            </datawriter_qos>
+
+            <datareader_qos topic_filter="ConvectiveCell">
+                <deadline>
+                    <period>
+                        <sec>15</sec>
+                        <nanosec>0</nanosec>
+                    </period>
+                </deadline>
+            </datareader_qos>
         </qos_profile>
 
         <!--

@@ -14,6 +14,7 @@
 #   center         Start an En-Route Center app
 #   airplane       Start an Aircraft simulator
 #   dashboard      Start the Dashboard monitor
+#   weather        Start the Weather Service (ConvectiveCell)
 #   dashboard      Start the Dashboard monitor
 #   help           Show this help message
 #
@@ -267,6 +268,22 @@ start_dashboard() {
     PIDS+=($!)
 }
 
+start_weather() {
+    local dur="$DURATION" spawn_interval="30" max_cells="5"
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --duration)        dur="$2"; shift 2 ;;
+            --spawn-interval)  spawn_interval="$2"; shift 2 ;;
+            --max-cells)       max_cells="$2"; shift 2 ;;
+            *) echo "Unknown weather option: $1"; exit 1 ;;
+        esac
+    done
+    echo "Starting Weather Service (spawn=${spawn_interval}s, max=${max_cells}, duration=${dur}s)..."
+    "$PYTHON" "$SRC_DIR/weather_service/weather_service.py" \
+        --duration "$dur" --spawn-interval "$spawn_interval" --max-cells "$max_cells" &
+    PIDS+=($!)
+}
+
 # ── "all" — full scenario ──────────────────────────────────────────────────
 
 start_all() {
@@ -342,7 +359,11 @@ print(' '.join(a['code'] for a in cfg['airports'] if a.get('serving_tracon')==ti
     done < <(json_query '["centers"]' "$SCENARIO_CONFIG")
     sleep 1
 
-    # 6. Aircraft — read from config
+    # 6. Weather Service — en-route convective cells
+    start_weather
+    sleep 1
+
+    # 7. Aircraft — read from config
     while IFS= read -r ac_json; do
         cs=$("$PYTHON" -c "import json,sys; d=json.loads(sys.argv[1]); print(d['callsign'])" "$ac_json")
         tail=$("$PYTHON" -c "import json,sys; d=json.loads(sys.argv[1]); print(d.get('tail_number',''))" "$ac_json")
@@ -352,7 +373,7 @@ print(' '.join(a['code'] for a in cfg['airports'] if a.get('serving_tracon')==ti
         sleep 0.3
     done < <(json_query '["aircraft"]' "$SCENARIO_CONFIG")
 
-    # 7. Dashboard (last — all other participants should be discovered)
+    # 8. Dashboard (last — all other participants should be discovered)
     sleep 2
     start_dashboard
 
@@ -509,6 +530,7 @@ case "$CMD" in
     center)      start_center "$@";             wait_for_procs ;;
     airplane)    start_airplane "$@";           wait_for_procs ;;
     dashboard)   start_dashboard "$@";          wait_for_procs ;;
+    weather)     start_weather "$@";            wait_for_procs ;;
     help|-h|--help) usage ;;
     *) echo "Unknown command: $CMD"; echo "Run '$0 help' for usage."; exit 1 ;;
 esac

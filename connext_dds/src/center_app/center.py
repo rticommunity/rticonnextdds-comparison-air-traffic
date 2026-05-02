@@ -19,6 +19,7 @@ ControllerInstruction, handles Handoff coordination, and publishes Alert.
 """
 
 import argparse
+import math
 import os
 import signal
 import sys
@@ -35,6 +36,8 @@ Alert = ATC.Alert
 AlertSeverity = ATC.AlertSeverity
 AlertType = ATC.AlertType
 ControllerInstruction = ATC.ControllerInstruction
+ConvectiveCell = ATC.ConvectiveCell
+ConvectiveSeverity = ATC.ConvectiveSeverity
 FacilityStatus = ATC.FacilityStatus
 FacilityType = ATC.FacilityType
 FlightPhase = ATC.FlightPhase
@@ -228,6 +231,22 @@ class EnRouteCenter:
         )
         self._publish_facility_status()
 
+        # ConvectiveCell reader — en-route weather hazards from WeatherService
+        cell_topic = dds.Topic(self.participant, "ConvectiveCell", ConvectiveCell)
+        self.cell_reader = dds.DataReader(
+            self.subscriber, cell_topic,
+            reader_qos(self.qos_provider, "StateDataProfile"),
+        )
+        # Active weather cells (cell_id → ConvectiveCell sample)
+        self._active_cells: dict[str, ConvectiveCell] = {}
+        # Cooldown per aircraft for weather deviation instructions (avoid spamming)
+        self._wx_deviation_cooldown: dict[str, float] = {}
+        # Aircraft currently being vectored around weather (tail → True)
+        self._wx_deviating: set[str] = set()
+        # Cached flight plans by tail_number for waypoint lookup
+        self._flight_plans: dict[str, FlightPlan] = {}
+        _WX_DEVIATION_COOLDOWN_S = 30  # seconds between repeated deviations per aircraft
+
         log.info(
             "Center %s (%s) initialized — FL%d-FL%d, boundary=%d vertices, "
             "bbox=[%.1f,%.1f]×[%.1f,%.1f]",
@@ -419,6 +438,7 @@ class EnRouteCenter:
         self.last_seen.pop(tail, None)
         self.acquired_at.pop(tail, None)
         self.seen_inside.discard(tail)
+        self._wx_deviating.discard(tail)
 
     # ── Handoff: accept incoming ───────────────────────────────────────
 
@@ -519,6 +539,225 @@ class EnRouteCenter:
         self.alert_writer.write(alert)
         self.alerted_uncoordinated.add(pos.tail_number)
 
+    # ── Flight plan caching ──────────────────────────────────────────
+
+    def cache_flight_plans(self):
+        """Cache flight plans from DDS for waypoint lookup during reroutes."""
+        for sample in self.fp_reader.take_data():
+            self._flight_plans[sample.tail_number] = sample
+
+    # ── Weather hazard avoidance ──────────────────────────────────────
+
+    _WX_DEVIATION_COOLDOWN_S = 30
+    _WX_THREAT_FACTOR = 1.5  # deviate if within 1.5× cell radius
+
+    @staticmethod
+    def _distance_nm(lat1, lon1, lat2, lon2) -> float:
+        rlat1, rlat2 = math.radians(lat1), math.radians(lat2)
+        dlat = rlat2 - rlat1
+        dlon = math.radians(lon2 - lon1)
+        a = math.sin(dlat / 2) ** 2 + math.cos(rlat1) * math.cos(rlat2) * math.sin(dlon / 2) ** 2
+        return 2 * 3440.065 * math.asin(min(1.0, math.sqrt(a)))
+
+    @staticmethod
+    def _bearing(lat1, lon1, lat2, lon2) -> float:
+        rlat1, rlat2 = math.radians(lat1), math.radians(lat2)
+        dlon = math.radians(lon2 - lon1)
+        x = math.sin(dlon) * math.cos(rlat2)
+        y = math.cos(rlat1) * math.sin(rlat2) - math.sin(rlat1) * math.cos(rlat2) * math.cos(dlon)
+        return math.degrees(math.atan2(x, y)) % 360
+
+    def poll_weather_cells(self):
+        """Read ConvectiveCell topic and maintain active-cells cache.
+
+        Uses take() (not take_data()) so we can detect disposed instances
+        (cell dissipated) via instance_state.
+        """
+        for sample in self.cell_reader.take():
+            if sample.info.valid:
+                data = sample.data
+                self._active_cells[data.cell_id] = data
+            else:
+                # Instance disposed or not-alive — remove from cache
+                # Try to identify cell_id via key_value / existing cache
+                ist = sample.info.state.instance_state
+                if ist != dds.InstanceState.ALIVE:
+                    # Remove any cell whose instance handle matches
+                    ih = sample.info.instance_handle
+                    to_remove = [
+                        cid for cid, c in self._active_cells.items()
+                        if self.cell_reader.lookup_instance(ConvectiveCell(cell_id=cid)) == ih
+                    ]
+                    for cid in to_remove:
+                        del self._active_cells[cid]
+                        log.info("Weather cell %s dissipated", cid)
+
+    def check_weather_cells(self):
+        """Issue heading deviations for aircraft that are near active convective cells."""
+        if not self._active_cells:
+            return
+
+        now = time.time()
+        airborne_phases = frozenset([
+            FlightPhase.CLIMB, FlightPhase.CRUISE, FlightPhase.DESCENT,
+        ])
+
+        for tail, pos in list(self.controlled_aircraft.items()):
+            if pos is None or pos.flight_phase not in airborne_phases:
+                continue
+            # Skip aircraft already deviating — they'll be cleared by check_clear_of_weather
+            if tail in self._wx_deviating:
+                continue
+            # Check cooldown
+            if now - self._wx_deviation_cooldown.get(tail, 0) < self._WX_DEVIATION_COOLDOWN_S:
+                continue
+
+            for cell in self._active_cells.values():
+                # Altitude check — aircraft must be within the cell's vertical extent
+                if pos.position.altitude_feet < cell.base_altitude_ft or \
+                   pos.position.altitude_feet > cell.top_altitude_ft:
+                    continue
+
+                dist = self._distance_nm(
+                    pos.position.latitude, pos.position.longitude,
+                    cell.center_latitude, cell.center_longitude,
+                )
+                threat_radius = cell.radius_nm * self._WX_THREAT_FACTOR
+
+                if dist < threat_radius:
+                    # Compute deviation heading: perpendicular to bearing toward cell
+                    bearing_to_cell = self._bearing(
+                        pos.position.latitude, pos.position.longitude,
+                        cell.center_latitude, cell.center_longitude,
+                    )
+                    # Deviate 90° to the right of the cell bearing
+                    deviation_hdg = (bearing_to_cell + 90) % 360
+
+                    instr = ControllerInstruction(
+                        instruction_id=make_id("WX-INSTR-"),
+                        controller_id=self.controller_id,
+                        tail_number=tail,
+                        instruction_type=InstructionType.HEADING,
+                        assigned_heading_degrees=deviation_hdg,
+                        clearance_text=(
+                            f"DEVIATE HDG {int(deviation_hdg)} — "
+                            f"WX cell {cell.cell_id} {cell.severity.name} "
+                            f"at {dist:.0f}nm"
+                        ),
+                        issued_at=now_ms(),
+                    )
+                    self.instr_writer.write(instr)
+                    self._wx_deviation_cooldown[tail] = now
+                    self._wx_deviating.add(tail)
+
+                    # Publish WEATHER_DEVIATION alert
+                    alert = Alert(
+                        alert_id=make_id("ALERT-"),
+                        alert_type=AlertType.WEATHER_DEVIATION,
+                        severity=(
+                            AlertSeverity.CRITICAL
+                            if cell.severity == ConvectiveSeverity.EXTREME
+                            else AlertSeverity.WARNING
+                        ),
+                        involved_aircraft=[tail],
+                        message=(
+                            f"Weather deviation: {tail} rerouted HDG "
+                            f"{int(deviation_hdg)} around {cell.severity.name} "
+                            f"cell {cell.cell_id} ({dist:.0f}nm)"
+                        ),
+                        timestamp=now_ms(),
+                    )
+                    self.alert_writer.write(alert)
+
+                    log.warning(
+                        "WEATHER DEVIATION: %s → HDG %d (cell %s %s at %.0fnm)",
+                        tail, int(deviation_hdg), cell.cell_id,
+                        cell.severity.name, dist,
+                    )
+                    break  # one deviation per aircraft per cycle
+
+    def check_clear_of_weather(self):
+        """For each deviating aircraft, check if it's now clear of all cells.
+        If clear, issue a CLEARANCE instruction to resume own navigation
+        direct a forward waypoint along the filed route.
+        """
+        if not self._wx_deviating:
+            return
+
+        cleared = []
+        for tail in list(self._wx_deviating):
+            pos = self.controlled_aircraft.get(tail)
+            if pos is None:
+                # Aircraft no longer controlled (handed off) — clean up
+                cleared.append(tail)
+                continue
+
+            # Check against every active cell
+            still_threatened = False
+            for cell in self._active_cells.values():
+                if pos.position.altitude_feet < cell.base_altitude_ft or \
+                   pos.position.altitude_feet > cell.top_altitude_ft:
+                    continue
+                dist = self._distance_nm(
+                    pos.position.latitude, pos.position.longitude,
+                    cell.center_latitude, cell.center_longitude,
+                )
+                # Clear when beyond 2× cell radius (safe margin beyond the 1.5× trigger)
+                if dist < cell.radius_nm * 2.0:
+                    still_threatened = True
+                    break
+
+            if not still_threatened:
+                cleared.append(tail)
+                # Find the forward waypoint from cached flight plan
+                wp_name = self._find_forward_waypoint(tail, pos)
+                clearance_text = f"RESUME OWN NAV DIRECT {wp_name}" if wp_name else "RESUME OWN NAV"
+                instr = ControllerInstruction(
+                    instruction_id=make_id("WX-CLR-"),
+                    controller_id=self.controller_id,
+                    tail_number=tail,
+                    instruction_type=InstructionType.CLEARANCE,
+                    clearance_text=clearance_text,
+                    issued_at=now_ms(),
+                )
+                self.instr_writer.write(instr)
+                log.info(
+                    "WEATHER CLEAR: %s — %s",
+                    tail, clearance_text,
+                )
+
+        for tail in cleared:
+            self._wx_deviating.discard(tail)
+
+    def _find_forward_waypoint(self, tail: str, pos) -> str | None:
+        """Find the first waypoint along the filed route that is ahead of
+        the aircraft's current position (closer to destination).
+        """
+        fp = self._flight_plans.get(tail)
+        if not fp or not fp.waypoints:
+            return None
+
+        dest_lat = pos.destination_airport  # need coords
+        # Use the last waypoint (ARRIVE) as destination reference
+        dest_wp = fp.waypoints[-1]
+        dest_lat_v = dest_wp.position.latitude
+        dest_lon_v = dest_wp.position.longitude
+        my_dist = self._distance_nm(
+            pos.position.latitude, pos.position.longitude,
+            dest_lat_v, dest_lon_v,
+        )
+
+        for wp in fp.waypoints:
+            wp_dist = self._distance_nm(
+                wp.position.latitude, wp.position.longitude,
+                dest_lat_v, dest_lon_v,
+            )
+            if wp_dist < my_dist:
+                return wp.name
+
+        # All waypoints behind us — go direct destination
+        return fp.waypoints[-1].name
+
     # ── Misc ───────────────────────────────────────────────────────────
 
     def process_acknowledgments(self):
@@ -556,6 +795,10 @@ class EnRouteCenter:
             self.process_handoffs()
             self.monitor_traffic()
             self.check_separation()
+            self.cache_flight_plans()
+            self.poll_weather_cells()
+            self.check_weather_cells()
+            self.check_clear_of_weather()
             self.process_acknowledgments()
             self.status_writer.assert_liveliness()
             time.sleep(1.0)

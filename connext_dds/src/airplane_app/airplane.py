@@ -32,6 +32,7 @@ GateAssignmentReply = ATC.GateAssignmentReply
 GateRequest = ATC.GateRequest
 GeoPosition = ATC.GeoPosition
 InstructionType = ATC.InstructionType
+NavStatus = ATC.NavStatus
 PilotAcknowledgment = ATC.PilotAcknowledgment
 Waypoint = ATC.Waypoint
 WeatherReport = ATC.WeatherReport
@@ -102,6 +103,11 @@ class AirplaneSimulator:
 
         # Distance tracking for descent planning
         self._total_route_nm = self._distance_nm(olat, olon, dlat, dlon)
+
+        # Weather deviation: when a HEADING instruction is received for
+        # weather avoidance, hold heading indefinitely until Center issues
+        # a CLEARANCE to resume own navigation.
+        self._wx_deviating = False
 
         # DDS setup
         self.qos_provider = load_qos_provider()
@@ -312,10 +318,11 @@ class AirplaneSimulator:
         speed = read_sim_speed_from_discovery(self.participant)
         TICK = 0.2 * speed  # seconds of sim-time per tick (5 Hz wall-clock)
 
-        # Always steer toward waypoints when airborne
+        # Always steer toward waypoints when airborne (unless wx deviation active)
         if self.phase not in (FlightPhase.PREFLIGHT, FlightPhase.TAXI_OUT,
                                FlightPhase.TAXI_IN, FlightPhase.PARKED):
-            self._steer_to_waypoint()
+            if not self._wx_deviating:
+                self._steer_to_waypoint()
 
         # Auto-trigger descent when close enough to destination
         # Descent from cruise_alt at 1500 fpm, at ~450 kt ground speed
@@ -395,6 +402,7 @@ class AirplaneSimulator:
             origin_airport=self.origin,
             destination_airport=self.destination,
             fuel_level_percent=self.fuel,
+            nav_status=NavStatus.WEATHER_DEVIATION if self._wx_deviating else NavStatus.NORMAL,
             assigned_runway=self.assigned_runway,
             timestamp=now_ms(),
         )
@@ -413,6 +421,10 @@ class AirplaneSimulator:
             # Apply instruction
             if sample.instruction_type == InstructionType.HEADING and sample.assigned_heading_degrees is not None:
                 self.heading = sample.assigned_heading_degrees
+                self._wx_deviating = True
+                log.info("Weather deviation: HDG %.0f (holding until CLEARANCE)", self.heading)
+            elif sample.instruction_type == InstructionType.CLEARANCE and sample.clearance_text:
+                self._handle_clearance(sample)
             elif sample.instruction_type == InstructionType.ALTITUDE and sample.assigned_altitude_feet is not None:
                 target = sample.assigned_altitude_feet
                 self.vertical_speed = 2000 if target > self.alt else -1500
@@ -429,6 +441,36 @@ class AirplaneSimulator:
                 acknowledged_at=now_ms(),
             )
             self.ack_writer.write(ack)
+
+    def _handle_clearance(self, sample):
+        """Handle a CLEARANCE instruction — typically 'resume own nav direct WPxx'.
+
+        The Center picks the forward waypoint and sends it in clearance_text
+        as 'RESUME OWN NAV DIRECT <waypoint_name>'.  We parse the waypoint
+        name and update our waypoint index accordingly.
+        """
+        text = sample.clearance_text or ""
+        # Extract waypoint name after "DIRECT "
+        wp_name = None
+        if "DIRECT " in text:
+            wp_name = text.split("DIRECT ", 1)[1].split()[0]
+
+        if wp_name:
+            for i, (name, _, _, _) in enumerate(self.waypoints):
+                if name == wp_name:
+                    old_name = self.waypoints[self.current_wp_index][0]
+                    self.current_wp_index = i
+                    self._wx_deviating = False
+                    log.info(
+                        "Resume own navigation: %s → direct %s (cleared by %s)",
+                        old_name, wp_name, sample.controller_id,
+                    )
+                    return
+
+        # Fallback: waypoint not found or no DIRECT — just resume nav
+        self._wx_deviating = False
+        log.info("CLEARANCE received from %s — resuming own navigation: %s",
+                 sample.controller_id, text)
 
     def check_weather(self):
         """Check destination weather reports."""

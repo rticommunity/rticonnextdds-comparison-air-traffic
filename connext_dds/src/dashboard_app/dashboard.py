@@ -30,6 +30,7 @@ from air_traffic import NationalAirTrafficControl as ATC
 AircraftPosition = ATC.AircraftPosition
 Alert = ATC.Alert
 ControllerInstruction = ATC.ControllerInstruction
+ConvectiveCell = ATC.ConvectiveCell
 FlightPlan = ATC.FlightPlan
 Handoff = ATC.Handoff
 PilotAcknowledgment = ATC.PilotAcknowledgment
@@ -57,6 +58,7 @@ TOPIC_MAP = {
     "Alert": (Alert, "AlertBroadcastProfile"),
     "AircraftTracking": (AircraftTracking, "StateDataProfile"),
     "FacilityStatus": (FacilityStatus, "StateDataProfile"),
+    "ConvectiveCell": (ConvectiveCell, "StateDataProfile"),
 }
 
 MAX_TRAIL_POINTS = 60  # ~60s of trail at 1 position/sec
@@ -102,6 +104,7 @@ state = {
     "handoff_log": deque(maxlen=50),
     "pending_pulses": [],
     "facility_status": {},  # facility_id → {facility_id, facility_type, status, tracked}
+    "convective_cells": {},  # cell_id → {cell_id, lat, lon, radius_nm, severity, ...}
 }
 
 # publication_handle → facility_id  (built from FacilityStatus samples)
@@ -145,6 +148,7 @@ def position_dict(s):
         "phase": s.flight_phase.name,
         "origin": s.origin_airport, "dest": s.destination_airport,
         "fuel_pct": int(s.fuel_level_percent),
+        "nav_status": s.nav_status.name if s.nav_status is not None else "NORMAL",
     }
 
 def weather_dict(s):
@@ -223,15 +227,30 @@ def tracking_dict(s):
     }
 
 
+def convective_cell_dict(s):
+    return {
+        "cell_id": s.cell_id,
+        "lat": round(s.center_latitude, 4),
+        "lon": round(s.center_longitude, 4),
+        "radius_nm": round(s.radius_nm, 1),
+        "top_alt": s.top_altitude_ft,
+        "base_alt": s.base_altitude_ft,
+        "severity": s.severity.name,
+        "heading": round(s.movement_heading_deg, 1),
+        "speed_kt": round(s.movement_speed_knots, 1),
+    }
+
+
 # ── DDS polling thread ─────────────────────────────────────────────────────
 
 def dds_poll_loop(readers, interval=0.25):
     """Background thread: take samples and update shared state."""
     facility_reader = readers["FacilityStatus"]
+    cell_reader = readers["ConvectiveCell"]
     while True:
         with state_lock:
             for topic_name, rdr in readers.items():
-                if topic_name == "FacilityStatus":
+                if topic_name in ("FacilityStatus", "ConvectiveCell"):
                     continue  # handled separately below
                 for sample in rdr.take_data():
                     state["counters"][topic_name] += 1
@@ -289,6 +308,25 @@ def dds_poll_loop(readers, interval=0.25):
                     ist = sample.info.state.instance_state
                     if ist != dds.InstanceState.ALIVE:
                         state["facility_status"][fid]["status"] = "OFFLINE"
+
+            # ConvectiveCell: use take() to detect disposed cells (dissipated)
+            for sample in cell_reader.take():
+                if sample.info.valid:
+                    data = sample.data
+                    state["counters"]["ConvectiveCell"] += 1
+                    state["convective_cells"][data.cell_id] = convective_cell_dict(data)
+                else:
+                    # Disposed or not-alive — remove cell from map
+                    ist = sample.info.state.instance_state
+                    if ist != dds.InstanceState.ALIVE:
+                        ih = sample.info.instance_handle
+                        to_remove = [
+                            cid for cid in state["convective_cells"]
+                            if cell_reader.lookup_instance(
+                                ConvectiveCell(cell_id=cid)) == ih
+                        ]
+                        for cid in to_remove:
+                            del state["convective_cells"][cid]
         time.sleep(interval)
 
 
@@ -328,6 +366,7 @@ def _snapshot():
             "handoff_log": list(state["handoff_log"]),
             "pulse_centers": pulses,
             "facility_status": facility_status,
+            "convective_cells": list(state["convective_cells"].values()),
             "kpi": {
                 "aircraft": len(state["positions"]),
                 "flight_plans": len(state["flight_plans"]),
@@ -548,6 +587,9 @@ tr.selected td { background: rgba(78,168,222,0.18); }
 .phase-APPROACH                   { background:#ff5722; }
 .phase-LANDING                    { background:#f44336; }
 .phase-HOLDING                    { background:#9c27b0; }
+.nav-wx { display:inline-block; padding:1px 4px; border-radius:3px; font-size:0.6rem;
+          font-weight:700; background:#ff9800; color:#000; margin-left:4px; animation:wxpulse 1.5s infinite; }
+@keyframes wxpulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
 
 /* Alerts */
 .alert-card { padding: 6px 8px; border-radius: 5px; margin-bottom: 5px; font-size: 0.75rem; }
@@ -661,6 +703,13 @@ tr.selected td { background: rgba(78,168,222,0.18); }
 .ho-tail { font-weight: 700; color: var(--text); min-width: 60px; }
 .ho-flow { color: var(--dim); font-family: monospace; font-size: 0.68rem; }
 .ho-facility { font-size: 0.6rem; color: var(--dim); }
+
+/* ── Weather cell severity colours on map ─────────────────────── */
+.wx-cell-tooltip {
+  background: rgba(30,30,40,0.92) !important; color: #e0e0e0 !important;
+  border: 1px solid rgba(255,100,100,0.4) !important; border-radius: 4px !important;
+  font-size: 11px !important; padding: 3px 7px !important;
+}
 
 </style>
 </head>
@@ -872,9 +921,54 @@ TRACONS.forEach(function(t) {
 centerLayer.addTo(map);
 traconLayer.addTo(map);
 
+// Weather cell layer
+var weatherLayer = L.layerGroup().addTo(map);
+var weatherCircles = {};  // cell_id → L.circle
+
+var WX_SEVERITY_COLOR = {
+  MODERATE: { color: "#ff9800", fill: "#ff9800" },
+  SEVERE:   { color: "#f44336", fill: "#f44336" },
+  EXTREME:  { color: "#d50000", fill: "#d50000" }
+};
+
+function renderWeatherCells(cells) {
+  var seen = {};
+  cells.forEach(function(c) {
+    seen[c.cell_id] = true;
+    var sc = WX_SEVERITY_COLOR[c.severity] || WX_SEVERITY_COLOR.MODERATE;
+    var radiusM = c.radius_nm * NM_TO_METERS;
+    if (weatherCircles[c.cell_id]) {
+      weatherCircles[c.cell_id].setLatLng([c.lat, c.lon]);
+      weatherCircles[c.cell_id].setRadius(radiusM);
+      weatherCircles[c.cell_id].setStyle({ color: sc.color, fillColor: sc.fill });
+    } else {
+      var circle = L.circle([c.lat, c.lon], {
+        radius: radiusM, color: sc.color, weight: 2, opacity: 0.7,
+        fillColor: sc.fill, fillOpacity: 0.18, dashArray: "4 3"
+      });
+      circle.bindTooltip(
+        "<strong>" + c.severity + "</strong> cell " + c.cell_id +
+        "<br>FL" + Math.round(c.base_alt/100) + "-FL" + Math.round(c.top_alt/100) +
+        "<br>r=" + c.radius_nm + "nm &bull; " + c.speed_kt + "kt HDG" + Math.round(c.heading),
+        { sticky: true, className: "wx-cell-tooltip" }
+      );
+      weatherLayer.addLayer(circle);
+      weatherCircles[c.cell_id] = circle;
+    }
+  });
+  // Remove dissipated cells
+  Object.keys(weatherCircles).forEach(function(cid) {
+    if (!seen[cid]) {
+      weatherLayer.removeLayer(weatherCircles[cid]);
+      delete weatherCircles[cid];
+    }
+  });
+}
+
 L.control.layers(null, {
   "ARTCC (Centers)": centerLayer,
-  "TRACON": traconLayer
+  "TRACON": traconLayer,
+  "Weather Cells": weatherLayer
 }, { position: "bottomleft", collapsed: false }).addTo(map);
 
 
@@ -1070,7 +1164,7 @@ function renderAircraft(positions, trails, tracking) {
     var ctrlLine = trk ? "<br><strong style='color:" + color + "'>" + trk.controller_id + "</strong> (" + trk.facility_type + ")" : "";
     aircraftMarkers[ac.tail_number].getPopup().setContent(
       "<strong>" + ac.callsign + "</strong> (" + ac.tail_number + ")<br>" +
-      '<span class="phase phase-' + ac.phase + '">' + ac.phase + "</span>" + ctrlLine + "<br>" +
+      '<span class="phase phase-' + ac.phase + '">' + ac.phase + "</span>" + (ac.nav_status === 'WEATHER_DEVIATION' ? ' <span class="nav-wx">⚡WX DEV</span>' : '') + ctrlLine + "<br>" +
       "Alt: " + ac.alt_ft.toLocaleString() + " ft &bull; " + ac.speed_kt + " kt<br>" +
       "Hdg: " + ac.heading + "&deg; &bull; Fuel: " + ac.fuel_pct + "%<br>" +
       ac.origin + " &rarr; " + ac.dest
@@ -1104,10 +1198,11 @@ function renderAircraft(positions, trails, tracking) {
         ctrlTag = ' \u00b7 ' + trk.facility_id;
       }
     }
+    var wxBadge = ac.nav_status === 'WEATHER_DEVIATION' ? ' <span class="nav-wx">⚡WX</span>' : '';
     aircraftLabels[ac.tail_number].setIcon(L.divIcon({
       className: "",
-      html: '<div class="aircraft-label" style="border-color:' + color + '80">' + ac.callsign + ' FL' + String(Math.round(ac.alt_ft/100)).padStart(3,'0') + ctrlTag + '</div>',
-      iconSize: [130, 18],
+      html: '<div class="aircraft-label" style="border-color:' + color + '80">' + ac.callsign + ' FL' + String(Math.round(ac.alt_ft/100)).padStart(3,'0') + ctrlTag + wxBadge + '</div>',
+      iconSize: [160, 18],
       iconAnchor: [-8, 20]
     }));
 
@@ -1187,6 +1282,7 @@ function update(d) {
   // Map
   renderAircraft(d.positions, d.trails, d.tracking);
   updateAirportWeather(d.weather);
+  if (d.convective_cells) renderWeatherCells(d.convective_cells);
 
   // Aircraft table
   lastPositions = d.positions;
@@ -1195,7 +1291,7 @@ function update(d) {
     var sel = ac.tail_number === selectedAircraftId ? ' class="selected"' : '';
     return '<tr' + sel + ' onclick="selectAircraft(\'' + ac.tail_number + '\')"><td>' + ac.callsign + "</td>" +
            "<td>" + ac.tail_number + "</td>" +
-           '<td><span class="phase phase-' + ac.phase + '">' + ac.phase + "</span></td>" +
+           '<td><span class="phase phase-' + ac.phase + '">' + ac.phase + "</span>" + (ac.nav_status === 'WEATHER_DEVIATION' ? ' <span class="nav-wx">⚡WX</span>' : '') + "</td>" +
            "<td>" + ac.alt_ft.toLocaleString() + "</td>" +
            "<td>" + ac.speed_kt + "</td>" +
            "<td>" + ac.fuel_pct + "%</td>" +
@@ -1248,7 +1344,7 @@ function update(d) {
   // Counters
   var ct = document.getElementById("counters-table");
   var names = ["AircraftPosition","ControllerInstruction","PilotAcknowledgment",
-               "FlightPlan","RunwayStatus","WeatherReport","Handoff","Alert","AircraftTracking","FacilityStatus"];
+               "FlightPlan","RunwayStatus","WeatherReport","Handoff","Alert","AircraftTracking","FacilityStatus","ConvectiveCell"];
   ct.innerHTML = names.map(function(n) {
     return "<tr><td>" + n + "</td><td>" + (d.counters[n] || 0) + "</td></tr>";
   }).join("");

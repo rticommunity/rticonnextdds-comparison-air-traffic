@@ -145,7 +145,15 @@ module NationalAirTrafficControl {
         RUNWAY_INCURSION,
         COMMUNICATION_LOSS,
         SYSTEM_FAILURE,
-        UNAUTHORIZED_ENTRY
+        UNAUTHORIZED_ENTRY,
+        WEATHER_DEVIATION
+    };
+
+    @appendable
+    enum ConvectiveSeverity {
+        MODERATE,
+        SEVERE,
+        EXTREME
     };
 
     @appendable
@@ -164,6 +172,14 @@ module NationalAirTrafficControl {
         RELEASED
     };
 
+    @appendable
+    enum NavStatus {
+        NORMAL,
+        WEATHER_DEVIATION,
+        HOLDING,
+        EMERGENCY
+    };
+
     // ─── Pub/Sub Topic Types ───────────────────────────────
 
     @topic
@@ -180,6 +196,7 @@ module NationalAirTrafficControl {
         AirportCode destination_airport;
         float fuel_level_percent;
         @optional RunwayId assigned_runway;
+        @optional NavStatus nav_status;
         Timestamp timestamp;
     };
 
@@ -303,6 +320,25 @@ module NationalAirTrafficControl {
         ControllerId controller_id;
         uint32 tracked_aircraft_count;
         Timestamp last_updated;
+    };
+
+    // ConvectiveCell — en-route weather hazard (storm cell).
+    // Published by WeatherService; consumed by Centers and Dashboard.
+    // Keyed by cell_id; KEEP_LAST 1 + TRANSIENT_LOCAL.
+    // Dispose instance when cell dissipates.
+    @topic
+    @mutable
+    struct ConvectiveCell {
+        @key IdString cell_id;
+        double center_latitude;
+        double center_longitude;
+        double radius_nm;           // circular approximation
+        int32  top_altitude_ft;
+        int32  base_altitude_ft;
+        ConvectiveSeverity severity;
+        float  movement_heading_deg;
+        float  movement_speed_knots;
+        Timestamp observation_time;
     };
 
     // ─── Request/Reply Types ───────────────────────────────
