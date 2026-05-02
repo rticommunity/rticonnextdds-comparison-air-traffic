@@ -14,6 +14,7 @@
 #   center         Start an En-Route Center app
 #   airplane       Start an Aircraft simulator
 #   dashboard      Start the Dashboard monitor
+#   dashboard      Start the Dashboard monitor
 #   help           Show this help message
 #
 # Global options:
@@ -28,7 +29,9 @@
 #   ./run_scenario.sh tower --airport-code KLAX
 #   ./run_scenario.sh center --center-id ZNY --min-alt 18000 --max-alt 60000
 #   ./run_scenario.sh airplane --callsign AAL100 --origin KJFK --destination KLAX
-#   ./run_scenario.sh dashboard --summary-interval 5
+#   ./run_scenario.sh center ZNY
+#   ./run_scenario.sh tower KJFK
+#   ./run_scenario.sh tracon N90
 #
 set -euo pipefail
 
@@ -115,6 +118,9 @@ start_flightplan() {
 }
 
 start_airport() {
+    if [[ $# -gt 0 && "$1" != --* ]]; then
+        restart_from_config airport "$@"; return
+    fi
     local code="KJFK" runways="" dur="$DURATION" wx_interval="25" serving_tracon=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -150,6 +156,9 @@ start_airport() {
 }
 
 start_tower() {
+    if [[ $# -gt 0 && "$1" != --* ]]; then
+        restart_from_config tower "$@"; return
+    fi
     local code="KJFK" dur="$DURATION" serving_tracon=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -170,6 +179,9 @@ start_tower() {
 }
 
 start_center() {
+    if [[ $# -gt 0 && "$1" != --* ]]; then
+        restart_from_config center "$@"; return
+    fi
     local cid="ZNY" dur="$DURATION" min_alt="18000" max_alt="60000"
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -188,6 +200,9 @@ start_center() {
 }
 
 start_airplane() {
+    if [[ $# -gt 0 && "$1" != --* ]]; then
+        restart_from_config airplane "$@"; return
+    fi
     local callsign="SIM001" origin="KJFK" dest="KLAX" dur="$DURATION" tail=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -211,6 +226,9 @@ start_airplane() {
 }
 
 start_tracon() {
+    if [[ $# -gt 0 && "$1" != --* ]]; then
+        restart_from_config tracon "$@"; return
+    fi
     local tid="N90" dur="$DURATION" airports="" serving_center=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -342,20 +360,155 @@ print(' '.join(a['code'] for a in cfg['airports'] if a.get('serving_tracon')==ti
     echo "=== All processes launched. Running for ${DURATION}s ==="
 }
 
+# ── "restart" — restart a facility using config ─────────────────────────────
+
+restart_from_config() {
+    local app_type="${1:?Usage: restart <center|tower|tracon|airport|airplane> <ID>}"
+    local instance_id="${2:?Usage: restart $app_type <ID>}"
+    app_type="${app_type,,}"  # lowercase
+
+    if [[ ! -f "$SCENARIO_CONFIG" ]]; then
+        echo "ERROR: Scenario config not found: $SCENARIO_CONFIG"
+        exit 1
+    fi
+
+    CONFIG_DURATION=$(json_query '["duration_seconds"]' "$SCENARIO_CONFIG")
+    if [[ "$DURATION" == "10000" ]]; then
+        DURATION="$CONFIG_DURATION"
+    fi
+
+    case "$app_type" in
+        center)
+            local cdata
+            cdata=$("$PYTHON" -c "
+import json, sys
+cfg = json.load(open(sys.argv[1]))
+for c in cfg['centers']:
+    if c['id'] == sys.argv[2]:
+        print(json.dumps(c)); break
+else:
+    print('NOT_FOUND')
+" "$SCENARIO_CONFIG" "$instance_id")
+            if [[ "$cdata" == "NOT_FOUND" ]]; then
+                echo "ERROR: Center '$instance_id' not found in config"
+                exit 1
+            fi
+            local min_alt max_alt
+            min_alt=$("$PYTHON" -c "import json,sys; print(json.loads(sys.argv[1])['min_altitude_ft'])" "$cdata")
+            max_alt=$("$PYTHON" -c "import json,sys; print(json.loads(sys.argv[1])['max_altitude_ft'])" "$cdata")
+            echo "Restarting Center $instance_id..."
+            start_center --center-id "$instance_id" --min-alt "$min_alt" --max-alt "$max_alt"
+            ;;
+        tower)
+            local st
+            st=$("$PYTHON" -c "
+import json, sys
+cfg = json.load(open(sys.argv[1]))
+for a in cfg['airports']:
+    if a['code'] == sys.argv[2]:
+        print(a.get('serving_tracon','')); break
+else:
+    print('NOT_FOUND')
+" "$SCENARIO_CONFIG" "$instance_id")
+            if [[ "$st" == "NOT_FOUND" ]]; then
+                echo "ERROR: Airport '$instance_id' not found in config"
+                exit 1
+            fi
+            echo "Restarting Tower $instance_id..."
+            start_tower --airport-code "$instance_id" --serving-tracon "$st"
+            ;;
+        tracon)
+            local sc airports
+            sc=$("$PYTHON" -c "
+import json, sys
+cfg = json.load(open(sys.argv[1]))
+for t in cfg.get('tracons',[]):
+    if t['id'] == sys.argv[2]:
+        print(t.get('serving_center','')); break
+else:
+    print('NOT_FOUND')
+" "$SCENARIO_CONFIG" "$instance_id")
+            if [[ "$sc" == "NOT_FOUND" ]]; then
+                echo "ERROR: TRACON '$instance_id' not found in config"
+                exit 1
+            fi
+            airports=$("$PYTHON" -c "
+import json, sys
+cfg = json.load(open(sys.argv[1]))
+print(' '.join(a['code'] for a in cfg['airports'] if a.get('serving_tracon') == sys.argv[2]))
+" "$SCENARIO_CONFIG" "$instance_id")
+            echo "Restarting TRACON $instance_id..."
+            start_tracon --tracon-id "$instance_id" --airports "$airports" --serving-center "$sc"
+            ;;
+        airport)
+            local code="$instance_id" runways st
+            runways=$("$PYTHON" -c "
+import json, sys
+cfg = json.load(open(sys.argv[1]))
+for a in cfg['airports']:
+    if a['code'] == sys.argv[2]:
+        print(' '.join(a['runways'])); break
+else:
+    print('NOT_FOUND')
+" "$SCENARIO_CONFIG" "$instance_id")
+            if [[ "$runways" == "NOT_FOUND" ]]; then
+                echo "ERROR: Airport '$instance_id' not found in config"
+                exit 1
+            fi
+            st=$("$PYTHON" -c "
+import json, sys
+cfg = json.load(open(sys.argv[1]))
+for a in cfg['airports']:
+    if a['code'] == sys.argv[2]:
+        print(a.get('serving_tracon','')); break
+" "$SCENARIO_CONFIG" "$instance_id")
+            echo "Restarting Airport $instance_id..."
+            start_airport --airport-code "$code" --runways "$runways" --serving-tracon "$st"
+            ;;
+        airplane)
+            local acdata
+            acdata=$("$PYTHON" -c "
+import json, sys
+cfg = json.load(open(sys.argv[1]))
+for ac in cfg['aircraft']:
+    if ac['callsign'] == sys.argv[2] or ac.get('tail_number','') == sys.argv[2]:
+        print(json.dumps(ac)); break
+else:
+    print('NOT_FOUND')
+" "$SCENARIO_CONFIG" "$instance_id")
+            if [[ "$acdata" == "NOT_FOUND" ]]; then
+                echo "ERROR: Aircraft '$instance_id' not found in config"
+                exit 1
+            fi
+            local cs tail orig dest
+            cs=$("$PYTHON" -c "import json,sys; print(json.loads(sys.argv[1])['callsign'])" "$acdata")
+            tail=$("$PYTHON" -c "import json,sys; print(json.loads(sys.argv[1]).get('tail_number',''))" "$acdata")
+            orig=$("$PYTHON" -c "import json,sys; print(json.loads(sys.argv[1])['origin'])" "$acdata")
+            dest=$("$PYTHON" -c "import json,sys; print(json.loads(sys.argv[1])['destination'])" "$acdata")
+            echo "Restarting Aircraft $cs..."
+            start_airplane --callsign "$cs" --tail-number "$tail" --origin "$orig" --destination "$dest"
+            ;;
+        *)
+            echo "Cannot restart '$app_type'. Supported: center, tower, tracon, airport, airplane"
+            exit 1
+            ;;
+    esac
+}
+
 # ── Main dispatch ───────────────────────────────────────────────────────────
 
 CMD="${1:-help}"
 shift || true
 
 case "$CMD" in
-    all)         start_all "$@";         wait_for_procs ;;
-    flightplan)  start_flightplan "$@";  wait_for_procs ;;
-    airport)     start_airport "$@";     wait_for_procs ;;
-    tower)       start_tower "$@";       wait_for_procs ;;
-    tracon)      start_tracon "$@";      wait_for_procs ;;
-    center)      start_center "$@";      wait_for_procs ;;
-    airplane)    start_airplane "$@";    wait_for_procs ;;
-    dashboard)   start_dashboard "$@";   wait_for_procs ;;
+    all)         start_all "$@";               wait_for_procs ;;
+    flightplan)  start_flightplan "$@";         wait_for_procs ;;
+    airport)     start_airport "$@";            wait_for_procs ;;
+    tower)       start_tower "$@";              wait_for_procs ;;
+    tracon)      start_tracon "$@";             wait_for_procs ;;
+    center)      start_center "$@";             wait_for_procs ;;
+    airplane)    start_airplane "$@";           wait_for_procs ;;
+    dashboard)   start_dashboard "$@";          wait_for_procs ;;
     help|-h|--help) usage ;;
     *) echo "Unknown command: $CMD"; echo "Run '$0 help' for usage."; exit 1 ;;
 esac

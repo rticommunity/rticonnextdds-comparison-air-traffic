@@ -43,7 +43,7 @@ from common import (
     load_qos_provider,
     make_id,
     now_ms,
-    read_sim_speed,
+    read_sim_speed_from_discovery,
     reader_qos,
     setup_logging,
     writer_qos,
@@ -309,7 +309,7 @@ class AirplaneSimulator:
 
     def advance_simulation(self):
         """Advance aircraft position and state by one tick."""
-        speed = read_sim_speed()
+        speed = read_sim_speed_from_discovery(self.participant)
         TICK = 0.2 * speed  # seconds of sim-time per tick (5 Hz wall-clock)
 
         # Always steer toward waypoints when airborne

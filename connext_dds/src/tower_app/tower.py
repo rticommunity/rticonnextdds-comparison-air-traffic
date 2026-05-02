@@ -23,6 +23,7 @@ Alert = ATC.Alert
 AlertSeverity = ATC.AlertSeverity
 AlertType = ATC.AlertType
 ControllerInstruction = ATC.ControllerInstruction
+FacilityStatus = ATC.FacilityStatus
 FacilityType = ATC.FacilityType
 FlightPlan = ATC.FlightPlan
 Handoff = ATC.Handoff
@@ -67,6 +68,7 @@ class TowerController:
         self.serving_tracon = serving_tracon
         self.tracked_aircraft: dict[str, AircraftPosition] = {}
         self.handed_off: set[str] = set()  # tail numbers already handed to TRACON
+        self.controlling: set[str] = set()  # tails with active AircraftTracking instance
 
         # DDS setup
         self.qos_provider = load_qos_provider()
@@ -169,6 +171,14 @@ class TowerController:
             writer_qos(self.qos_provider, "StateDataProfile"),
         )
 
+        # FacilityStatus writer — per-facility heartbeat & workload
+        status_topic = dds.Topic(self.participant, "FacilityStatus", FacilityStatus)
+        self.status_writer = dds.DataWriter(
+            self.publisher, status_topic,
+            writer_qos(self.qos_provider, "StateDataProfile"),
+        )
+        self._publish_facility_status()
+
         # Publish initial runway status
         self._publish_runway_status("09L", RunwayOperationalStatus.OPEN)
         self._publish_runway_status("27R", RunwayOperationalStatus.OPEN)
@@ -209,13 +219,44 @@ class TowerController:
         log.info("Issued %s to %s", instr_type.name, tail_number)
 
     def monitor_traffic(self):
-        """Read aircraft positions and track local traffic."""
+        """Read aircraft positions and track local traffic.
+
+        The CFT matches origin_airport OR destination_airport, so it delivers
+        positions for aircraft that may be far from the airport.  Only track:
+          - Departures originating here (ground to handoff altitude)
+          - Arrivals below 3 000 ft AGL or in APPROACH/LANDING/TAXI_IN phase
+        """
+        TOWER_CEILING_FT = 3000
         for sample in self.pos_reader.take_data():
             tail = sample.tail_number
+            if tail in self.handed_off:
+                continue  # no longer under our control
+            if sample.flight_phase == ATC.FlightPhase.PARKED:
+                if tail in self.tracked_aircraft:
+                    self.tracked_aircraft.pop(tail)
+                    self._unregister_tracking(tail)
+                continue
+
+            # Decide whether this aircraft is in our airspace
+            is_local_departure = (
+                sample.origin_airport == self.airport_code
+                and sample.position.altitude_feet < TOWER_CEILING_FT
+            )
+            is_local_arrival = (
+                sample.destination_airport == self.airport_code
+                and (sample.position.altitude_feet < TOWER_CEILING_FT
+                     or sample.flight_phase.value >= 6)  # APPROACH or later
+            )
+            is_ground = sample.flight_phase.value <= 1  # PREFLIGHT or TAXI_OUT
+
+            if not (is_local_departure or is_local_arrival or is_ground):
+                # Aircraft matched CFT but is not in tower airspace yet
+                continue
+
             is_new = tail not in self.tracked_aircraft
             self.tracked_aircraft[tail] = sample
             # First time seeing a departing aircraft → we are the initial controller
-            if is_new and sample.origin_airport == self.airport_code and tail not in self.handed_off:
+            if is_new and sample.origin_airport == self.airport_code:
                 self._publish_tracking(tail)
 
         if self.tracked_aircraft:
@@ -233,7 +274,7 @@ class TowerController:
                 )
 
         # Hand departing aircraft to TRACON once above 1500 ft
-        for ac_id, pos in self.tracked_aircraft.items():
+        for ac_id, pos in list(self.tracked_aircraft.items()):
             if ac_id in self.handed_off:
                 continue
             if (pos.origin_airport == self.airport_code
@@ -254,6 +295,7 @@ class TowerController:
                 self.ho_writer.write(ho)
                 self._unregister_tracking(ac_id)
                 self.handed_off.add(ac_id)
+                self.tracked_aircraft.pop(ac_id, None)
                 log.info("Handoff %s → TRACON (departing, %.0fft)", ac_id, pos.position.altitude_feet)
 
     def process_acknowledgments(self):
@@ -295,6 +337,17 @@ class TowerController:
 
     # ── AircraftTracking lifecycle ─────────────────────────────────────
 
+    def _publish_facility_status(self):
+        """Publish current facility status (heartbeat + workload)."""
+        sample = FacilityStatus(
+            facility_id=self.airport_code,
+            facility_type=FacilityType.TOWER,
+            controller_id=self.controller_id,
+            tracked_aircraft_count=len(self.controlling),
+            last_updated=now_ms(),
+        )
+        self.status_writer.write(sample)
+
     def _publish_tracking(self, tail_number: str):
         """Publish that we are now the controller of record."""
         sample = AircraftTracking(
@@ -305,6 +358,8 @@ class TowerController:
             acquired_at=now_ms(),
         )
         self.tracking_writer.write(sample)
+        self.controlling.add(tail_number)
+        self._publish_facility_status()
         log.info("Tracking %s — controller of record: %s (%s)",
                  tail_number, self.controller_id, self.airport_code)
 
@@ -314,6 +369,8 @@ class TowerController:
         handle = self.tracking_writer.lookup_instance(sample)
         if handle is not None and handle.is_nil is False:
             self.tracking_writer.unregister_instance(handle)
+            self.controlling.discard(tail_number)
+            self._publish_facility_status()
             log.info("Unregistered tracking for %s", tail_number)
         else:
             log.debug("No tracking instance to unregister for %s", tail_number)
@@ -339,6 +396,7 @@ class TowerController:
             self.process_acknowledgments()
             self.process_handoffs()
             self.check_weather()
+            self.status_writer.assert_liveliness()
             time.sleep(1.0)
 
         log.info("Tower %s shutting down", self.airport_code)

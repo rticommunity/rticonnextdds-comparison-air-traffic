@@ -13,12 +13,11 @@ import rti.connextdds as dds
 DOMAIN_ID = 0
 QOS_FILE = os.path.join(os.path.dirname(__file__), "..", "..", "qos", "USER_QOS_PROFILES.xml")
 QOS_LIB = "AirTrafficControl_QosLib"
-SIM_SPEED_FILE = os.path.join(os.path.dirname(__file__), "..", "..", "config", ".sim_speed")
 SCENARIO_CONFIG = os.path.join(os.path.dirname(__file__), "..", "..", "config", "scenario_default.json")
 
 
 def _load_scenario(config_path: str = SCENARIO_CONFIG) -> dict:
-    """Load and cache the scenario JSON."""
+    """Load the scenario JSON from disk."""
     with open(config_path) as f:
         return json.load(f)
 
@@ -84,20 +83,60 @@ def find_center_for_position(
     return None
 
 
-def read_sim_speed() -> float:
-    """Read simulation speed multiplier from shared file. Returns 1.0 on error."""
+SIM_SPEED_PROP = "sim_speed"
+
+
+def initial_sim_speed() -> float:
+    """Read initial_speed from scenario config JSON (used at participant creation)."""
     try:
-        with open(SIM_SPEED_FILE) as f:
-            return max(0.1, min(50.0, float(f.read().strip())))
+        return max(0.1, min(50.0, float(_load_scenario().get("initial_speed", 1.0))))
     except (FileNotFoundError, ValueError):
         return 1.0
 
 
-def write_sim_speed(speed: float) -> None:
-    """Write simulation speed multiplier to shared file."""
+def set_sim_speed(participant: dds.DomainParticipant, speed: float) -> None:
+    """Update the propagated sim_speed participant property."""
     speed = max(0.1, min(50.0, speed))
-    with open(SIM_SPEED_FILE, "w") as f:
-        f.write(str(speed))
+    qos = participant.qos
+    qos.property.set({SIM_SPEED_PROP: str(speed)}, propagate=True)
+    participant.qos = qos
+
+
+def get_sim_speed(participant: dds.DomainParticipant) -> float:
+    """Read sim_speed from the local participant's own property."""
+    try:
+        return float(participant.qos.property.get(SIM_SPEED_PROP))
+    except (KeyError, ValueError):
+        return 1.0
+
+
+def read_sim_speed_from_discovery(participant: dds.DomainParticipant) -> float:
+    """Read sim_speed from discovered participants via builtin reader.
+
+    Only returns a value if a discovered participant actually has the
+    sim_speed property set.  Falls back to initial_speed from config.
+    """
+    reader = participant.participant_reader
+    for sample in reader.read():
+        if sample.info.valid:
+            try:
+                val = sample.data.property.try_get(SIM_SPEED_PROP)
+                if val is not None:
+                    return max(0.1, min(50.0, float(val)))
+            except (ValueError, AttributeError):
+                continue
+    return initial_sim_speed()
+
+
+def write_sim_speed(speed: float) -> None:
+    """Update initial_speed in scenario config JSON (for persistence across restarts)."""
+    speed = max(0.1, min(50.0, speed))
+    with open(SCENARIO_CONFIG) as f:
+        data = json.load(f)
+    data["initial_speed"] = speed
+    with open(SCENARIO_CONFIG, "w") as f:
+        json.dump(data, f, indent=2)
+        f.write("\n")
 
 
 def now_ms() -> int:

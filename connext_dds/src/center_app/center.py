@@ -35,7 +35,9 @@ Alert = ATC.Alert
 AlertSeverity = ATC.AlertSeverity
 AlertType = ATC.AlertType
 ControllerInstruction = ATC.ControllerInstruction
+FacilityStatus = ATC.FacilityStatus
 FacilityType = ATC.FacilityType
+FlightPhase = ATC.FlightPhase
 FlightPlan = ATC.FlightPlan
 Handoff = ATC.Handoff
 HandoffStatus = ATC.HandoffStatus
@@ -108,6 +110,8 @@ class EnRouteCenter:
         self.handed_off: set[str] = set()
         # Aircraft we've confirmed inside our polygon (prevents premature handoff)
         self.seen_inside: set[str] = set()
+        # Cooldown for separation alerts per aircraft pair
+        self._sep_cooldown: dict[tuple[str, str], float] = {}
         # Aircraft we've already alerted about (avoid spam)
         self.alerted_uncoordinated: set[str] = set()
         # Grace period (seconds) before forwarding a never-entered aircraft
@@ -216,6 +220,14 @@ class EnRouteCenter:
             writer_qos(self.qos_provider, "StateDataProfile"),
         )
 
+        # FacilityStatus writer — per-facility heartbeat & workload
+        status_topic = dds.Topic(self.participant, "FacilityStatus", FacilityStatus)
+        self.status_writer = dds.DataWriter(
+            self.publisher, status_topic,
+            writer_qos(self.qos_provider, "StateDataProfile"),
+        )
+        self._publish_facility_status()
+
         log.info(
             "Center %s (%s) initialized — FL%d-FL%d, boundary=%d vertices, "
             "bbox=[%.1f,%.1f]×[%.1f,%.1f]",
@@ -305,17 +317,34 @@ class EnRouteCenter:
 
     # ── Separation checking ────────────────────────────────────────────
 
+    _GROUND_PHASES = frozenset([
+        FlightPhase.PREFLIGHT, FlightPhase.TAXI_OUT,
+        FlightPhase.TAXI_IN, FlightPhase.PARKED,
+    ])
+    _SEP_COOLDOWN_S = 30  # suppress duplicate alerts for the same pair
+
     def check_separation(self):
-        """Check for separation violations between controlled aircraft pairs."""
-        positions = [p for p in self.controlled_aircraft.values() if p is not None]
-        for i, a in enumerate(positions):
-            for b in positions[i + 1:]:
+        """Check for separation violations between controlled aircraft pairs.
+
+        Skips ground-phase aircraft and suppresses duplicate alerts per pair.
+        """
+        airborne = [
+            p for p in self.controlled_aircraft.values()
+            if p is not None and p.flight_phase not in self._GROUND_PHASES
+        ]
+        now = time.time()
+        for i, a in enumerate(airborne):
+            for b in airborne[i + 1:]:
                 lat_diff = abs(a.position.latitude - b.position.latitude)
                 lon_diff = abs(a.position.longitude - b.position.longitude)
                 alt_diff = abs(a.position.altitude_feet - b.position.altitude_feet)
 
                 # Simplified separation check (5nm lateral ≈ 0.083°, 1000ft vertical)
                 if lat_diff < 0.083 and lon_diff < 0.083 and alt_diff < 1000:
+                    pair = tuple(sorted((a.tail_number, b.tail_number)))
+                    if now - self._sep_cooldown.get(pair, 0) < self._SEP_COOLDOWN_S:
+                        continue
+                    self._sep_cooldown[pair] = now
                     log.warning(
                         "SEPARATION VIOLATION: %s and %s in %s",
                         a.tail_number, b.tail_number, self.center_id,
@@ -430,6 +459,17 @@ class EnRouteCenter:
 
     # ── AircraftTracking lifecycle ─────────────────────────────────────
 
+    def _publish_facility_status(self):
+        """Publish current facility status (heartbeat + workload)."""
+        sample = FacilityStatus(
+            facility_id=self.center_id,
+            facility_type=FacilityType.CENTER,
+            controller_id=self.controller_id,
+            tracked_aircraft_count=len(self.controlled_aircraft),
+            last_updated=now_ms(),
+        )
+        self.status_writer.write(sample)
+
     def _publish_tracking(self, tail_number: str):
         """Publish that we are now the controller of record for this aircraft."""
         sample = AircraftTracking(
@@ -440,6 +480,7 @@ class EnRouteCenter:
             acquired_at=now_ms(),
         )
         self.tracking_writer.write(sample)
+        self._publish_facility_status()
         log.info("Tracking %s — controller of record: %s (%s)",
                  tail_number, self.controller_id, self.center_id)
 
@@ -449,6 +490,7 @@ class EnRouteCenter:
         handle = self.tracking_writer.lookup_instance(sample)
         if handle is not None and handle.is_nil is False:
             self.tracking_writer.unregister_instance(handle)
+            self._publish_facility_status()
             log.info("Unregistered tracking for %s", tail_number)
         else:
             log.debug("No tracking instance to unregister for %s", tail_number)
@@ -515,6 +557,7 @@ class EnRouteCenter:
             self.monitor_traffic()
             self.check_separation()
             self.process_acknowledgments()
+            self.status_writer.assert_liveliness()
             time.sleep(1.0)
 
         log.info("Center %s shutting down — controlled %d, handed off %d, alerts %d",

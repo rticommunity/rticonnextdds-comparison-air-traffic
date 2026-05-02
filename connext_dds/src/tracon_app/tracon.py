@@ -27,7 +27,9 @@ Alert = ATC.Alert
 AlertSeverity = ATC.AlertSeverity
 AlertType = ATC.AlertType
 ControllerInstruction = ATC.ControllerInstruction
+FacilityStatus = ATC.FacilityStatus
 FacilityType = ATC.FacilityType
+FlightPhase = ATC.FlightPhase
 FlightPlan = ATC.FlightPlan
 Handoff = ATC.Handoff
 HandoffStatus = ATC.HandoffStatus
@@ -90,6 +92,8 @@ class TraconController:
         self.tracked_aircraft: dict[str, AircraftPosition] = {}
         self.handed_off: set[str] = set()  # tail numbers already handed off this cycle
         self.acquired_aircraft: set[str] = set()  # aircraft formally received via handoff
+        self.controlling: set[str] = set()  # tails with active AircraftTracking instance
+        self._sep_cooldown: dict[tuple[str, str], float] = {}  # (tail_a, tail_b) -> last alert time
 
         # DDS setup
         self.qos_provider = load_qos_provider()
@@ -183,6 +187,14 @@ class TraconController:
             writer_qos(self.qos_provider, "StateDataProfile"),
         )
 
+        # FacilityStatus writer — per-facility heartbeat & workload
+        status_topic = dds.Topic(self.participant, "FacilityStatus", FacilityStatus)
+        self.status_writer = dds.DataWriter(
+            self.publisher, status_topic,
+            writer_qos(self.qos_provider, "StateDataProfile"),
+        )
+        self._publish_facility_status()
+
         log.info(
             "TRACON %s (%s) initialized — airports: %s, FL%d–FL%d",
             tracon_id, controller_id, ", ".join(airport_codes),
@@ -230,20 +242,35 @@ class TraconController:
 
     # ── Separation checking ────────────────────────────────────────────
 
+    _GROUND_PHASES = frozenset([
+        FlightPhase.PREFLIGHT, FlightPhase.TAXI_OUT,
+        FlightPhase.TAXI_IN, FlightPhase.PARKED,
+    ])
+    _SEP_COOLDOWN_S = 30  # suppress duplicate alerts for the same pair
+
     def check_separation(self):
         """Check for separation violations in the terminal area.
 
         Terminal area uses tighter separation: 3 nm lateral / 1000 ft vertical.
+        Skips ground-phase aircraft and suppresses duplicate alerts per pair.
         """
-        positions = list(self.tracked_aircraft.values())
-        for i, a in enumerate(positions):
-            for b in positions[i + 1:]:
+        airborne = [
+            p for p in self.tracked_aircraft.values()
+            if p.flight_phase not in self._GROUND_PHASES
+        ]
+        now = time.time()
+        for i, a in enumerate(airborne):
+            for b in airborne[i + 1:]:
                 lat_diff = abs(a.position.latitude - b.position.latitude)
                 lon_diff = abs(a.position.longitude - b.position.longitude)
                 alt_diff = abs(a.position.altitude_feet - b.position.altitude_feet)
 
                 # 3 nm lateral ≈ 0.05°, 1000 ft vertical
                 if lat_diff < 0.05 and lon_diff < 0.05 and alt_diff < 1000:
+                    pair = tuple(sorted((a.tail_number, b.tail_number)))
+                    if now - self._sep_cooldown.get(pair, 0) < self._SEP_COOLDOWN_S:
+                        continue
+                    self._sep_cooldown[pair] = now
                     log.warning(
                         "TERMINAL SEPARATION VIOLATION: %s and %s (%.0fft / %.0fft)",
                         a.tail_number, b.tail_number,
@@ -371,6 +398,17 @@ class TraconController:
 
     # ── AircraftTracking lifecycle ─────────────────────────────────────
 
+    def _publish_facility_status(self):
+        """Publish current facility status (heartbeat + workload)."""
+        sample = FacilityStatus(
+            facility_id=self.tracon_id,
+            facility_type=FacilityType.TRACON,
+            controller_id=self.controller_id,
+            tracked_aircraft_count=len(self.controlling),
+            last_updated=now_ms(),
+        )
+        self.status_writer.write(sample)
+
     def _publish_tracking(self, tail_number: str):
         """Publish that we are now the controller of record."""
         sample = AircraftTracking(
@@ -381,6 +419,8 @@ class TraconController:
             acquired_at=now_ms(),
         )
         self.tracking_writer.write(sample)
+        self.controlling.add(tail_number)
+        self._publish_facility_status()
         log.info("Tracking %s — controller of record: %s (%s)",
                  tail_number, self.controller_id, self.tracon_id)
 
@@ -390,6 +430,8 @@ class TraconController:
         handle = self.tracking_writer.lookup_instance(sample)
         if handle is not None and handle.is_nil is False:
             self.tracking_writer.unregister_instance(handle)
+            self.controlling.discard(tail_number)
+            self._publish_facility_status()
             log.info("Unregistered tracking for %s", tail_number)
         else:
             log.debug("No tracking instance to unregister for %s", tail_number)
@@ -438,6 +480,7 @@ class TraconController:
             self.manage_handoffs()
             self.process_handoffs()
             self.process_acknowledgments()
+            self.status_writer.assert_liveliness()
             time.sleep(1.0)
 
         log.info("TRACON %s shutting down", self.tracon_id)

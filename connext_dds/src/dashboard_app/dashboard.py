@@ -33,6 +33,7 @@ PilotAcknowledgment = ATC.PilotAcknowledgment
 RunwayStatus = ATC.RunwayStatus
 WeatherReport = ATC.WeatherReport
 AircraftTracking = ATC.AircraftTracking
+FacilityStatus = ATC.FacilityStatus
 from common import (
     create_participant,
     create_subscriber,
@@ -52,9 +53,9 @@ TOPIC_MAP = {
     "Handoff": (Handoff, "HandoffProfile"),
     "Alert": (Alert, "AlertBroadcastProfile"),
     "AircraftTracking": (AircraftTracking, "StateDataProfile"),
+    "FacilityStatus": (FacilityStatus, "StateDataProfile"),
 }
 
-MAX_EVENTS = 100
 MAX_TRAIL_POINTS = 60  # ~60s of trail at 1 position/sec
 
 # ── Load scenario config for airspace boundaries ───────────────────────────
@@ -93,12 +94,15 @@ state = {
     "handoffs": [],
     "instructions": [],
     "acks": [],
-    "events": [],
     "counters": defaultdict(int),
     "tracking": {},
     "handoff_log": deque(maxlen=50),
     "pending_pulses": [],
+    "facility_status": {},  # facility_id → {facility_id, facility_type, status, tracked}
 }
+
+# publication_handle → facility_id  (built from FacilityStatus samples)
+_pub_to_facility: dict = {}
 
 
 # ── DDS → dict helpers ─────────────────────────────────────────────────────
@@ -152,6 +156,7 @@ def alert_dict(s):
         "severity": s.severity.name,
         "aircraft": ", ".join(s.involved_aircraft) if s.involved_aircraft else "",
         "airport": s.airport_code or "", "message": s.message,
+        "ts": s.timestamp,
     }
 
 def handoff_dict(s):
@@ -166,6 +171,7 @@ def handoff_dict(s):
         "from": s.from_controller_id, "to": s.to_controller_id,
         "status": s.status.name,
         "from_facility": from_type, "to_facility": to_type,
+        "ts": s.initiated_at,
     }
 
 def instruction_dict(s):
@@ -194,9 +200,12 @@ def tracking_dict(s):
 
 def dds_poll_loop(readers, interval=0.25):
     """Background thread: take samples and update shared state."""
+    facility_reader = readers["FacilityStatus"]
     while True:
         with state_lock:
             for topic_name, rdr in readers.items():
+                if topic_name == "FacilityStatus":
+                    continue  # handled separately below
                 for sample in rdr.take_data():
                     state["counters"][topic_name] += 1
                     if topic_name == "AircraftPosition":
@@ -205,27 +214,15 @@ def dds_poll_loop(readers, interval=0.25):
                             [round(sample.position.latitude, 4),
                              round(sample.position.longitude, 4)]
                         )
-                        _event(f"\u2708\ufe0f {sample.callsign} "
-                               f"{sample.flight_phase.name} "
-                               f"FL{int(sample.position.altitude_feet/100):03d} "
-                               f"{int(sample.ground_speed_knots)}kt")
                     elif topic_name == "WeatherReport":
                         state["weather"][sample.airport_code] = weather_dict(sample)
-                        _event(f"\U0001f324 {sample.airport_code} "
-                               f"{sample.conditions.name} vis {int(sample.visibility_meters)}m")
                     elif topic_name == "RunwayStatus":
                         key = f"{sample.airport_code}/{sample.runway_id}"
                         state["runways"][key] = runway_dict(sample)
-                        _event(f"\U0001f6ec {key} \u2192 {sample.status.name}")
                     elif topic_name == "FlightPlan":
                         state["flight_plans"][sample.flight_plan_id] = flightplan_dict(sample)
-                        _event(f"\U0001f4cb FP {sample.flight_plan_id} "
-                               f"{sample.departure_airport}\u2192{sample.arrival_airport} "
-                               f"{sample.status.name}")
                     elif topic_name == "Alert":
                         state["alerts"].append(alert_dict(sample))
-                        _event(f"\U0001f6a8 {sample.severity.name} "
-                               f"{sample.alert_type.name}: {sample.message}")
                     elif topic_name == "Handoff":
                         hd = handoff_dict(sample)
                         state["handoffs"].append(hd)
@@ -234,27 +231,38 @@ def dds_poll_loop(readers, interval=0.25):
                             if sample.to_facility_type == ATC.FacilityType.CENTER:
                                 state["pending_pulses"].append(
                                     sample.to_controller_id.replace("CTR-", "", 1))
-                        ft = ""
-                        if sample.from_facility_type is not None and sample.to_facility_type is not None:
-                            ft = f" [{sample.from_facility_type.name}→{sample.to_facility_type.name}]"
-                        _event(f"\U0001f504 Handoff {sample.tail_number} "
-                               f"{sample.from_controller_id}→{sample.to_controller_id}{ft}")
                     elif topic_name == "ControllerInstruction":
                         state["instructions"].append(instruction_dict(sample))
-                        _event(f"\U0001f4e1 Instr \u2192 {sample.tail_number} "
-                               f"{sample.instruction_type.name}")
                     elif topic_name == "PilotAcknowledgment":
                         state["acks"].append(ack_dict(sample))
-                        _event(f"\u2705 ACK {sample.tail_number} {sample.status.name}")
                     elif topic_name == "AircraftTracking":
                         state["tracking"][sample.tail_number] = tracking_dict(sample)
+
+            # FacilityStatus: use take() to capture publication_handle
+            # and instance_state for liveliness detection
+            for sample in facility_reader.take():
+                fid = None
+                if sample.info.valid:
+                    data = sample.data
+                    state["counters"]["FacilityStatus"] += 1
+                    fid = data.facility_id
+                    _pub_to_facility[sample.info.publication_handle] = fid
+                    state["facility_status"][fid] = {
+                        "facility_id": fid,
+                        "facility_type": data.facility_type.name,
+                        "status": "ONLINE",
+                        "tracked": data.tracked_aircraft_count,
+                    }
+                else:
+                    # Invalid sample — writer liveliness lost or instance disposed
+                    fid = _pub_to_facility.get(sample.info.publication_handle)
+
+                # Check instance state for NOT_ALIVE
+                if fid and fid in state["facility_status"]:
+                    ist = sample.info.state.instance_state
+                    if ist != dds.InstanceState.ALIVE:
+                        state["facility_status"][fid]["status"] = "OFFLINE"
         time.sleep(interval)
-
-
-def _event(text):
-    state["events"].insert(0, text)
-    if len(state["events"]) > MAX_EVENTS:
-        state["events"] = state["events"][:MAX_EVENTS]
 
 
 # ── Flask app ───────────────────────────────────────────────────────────────
@@ -268,18 +276,31 @@ def _snapshot():
         trails = {aid: list(pts) for aid, pts in state["trails"].items()}
         pulses = list(state["pending_pulses"])
         state["pending_pulses"].clear()
+
+        # Facility status — tracked count comes directly from FacilityStatus topic
+        facility_status = []
+        for fid, fs in state["facility_status"].items():
+            facility_status.append({
+                "facility_id": fid,
+                "facility_type": fs["facility_type"],
+                "status": fs["status"],
+                "tracked": fs["tracked"],
+            })
+        # Sort: centers first, then TRACONs, then towers; alphabetically within type
+        type_order = {"CENTER": 0, "TRACON": 1, "TOWER": 2, "NATIONAL": 3}
+        facility_status.sort(key=lambda f: (type_order.get(f["facility_type"], 9), f["facility_id"]))
+
         return {
             "positions": list(state["positions"].values()),
             "trails": trails,
             "weather": list(state["weather"].values()),
-            "runways": list(state["runways"].values()),
             "flight_plans": list(state["flight_plans"].values()),
             "alerts": state["alerts"][-20:],
-            "events": state["events"][:50],
             "counters": dict(state["counters"]),
             "tracking": dict(state["tracking"]),
             "handoff_log": list(state["handoff_log"]),
             "pulse_centers": pulses,
+            "facility_status": facility_status,
             "kpi": {
                 "aircraft": len(state["positions"]),
                 "flight_plans": len(state["flight_plans"]),
@@ -301,17 +322,21 @@ def index():
 
 @app.route("/speed", methods=["POST"])
 def set_speed():
-    from common import write_sim_speed, read_sim_speed
+    from common import set_sim_speed, get_sim_speed, write_sim_speed
+    participant = app.config["dds_participant"]
     data = request.get_json(silent=True)
     if data and "speed" in data:
-        write_sim_speed(float(data["speed"]))
-    return {"speed": read_sim_speed()}
+        speed = float(data["speed"])
+        set_sim_speed(participant, speed)
+        write_sim_speed(speed)  # persist for restarts
+    return {"speed": get_sim_speed(participant)}
 
 
 @app.route("/speed")
 def get_speed():
-    from common import read_sim_speed
-    return {"speed": read_sim_speed()}
+    from common import get_sim_speed
+    participant = app.config["dds_participant"]
+    return {"speed": get_sim_speed(participant)}
 
 
 @app.route("/stream")
@@ -407,7 +432,11 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-
 .section { margin-bottom: 14px; }
 .section-hdr { font-size: 0.8rem; font-weight: 700; text-transform: uppercase;
                letter-spacing: 0.6px; color: var(--accent); margin-bottom: 6px;
-               display: flex; align-items: center; gap: 6px; }
+               display: flex; align-items: center; gap: 6px;
+               cursor: pointer; user-select: none; }
+.section-hdr::before { content: '\25BE'; font-size: 0.7rem; transition: transform 0.15s; }
+.section.collapsed .section-hdr::before { transform: rotate(-90deg); }
+.section.collapsed .section-body { display: none; }
 .section-hdr .badge { background: var(--accent); color: #000; border-radius: 10px;
                       padding: 0 7px; font-size: 0.7rem; font-weight: 700; }
 
@@ -434,27 +463,29 @@ tr.selected td { background: rgba(78,168,222,0.18); }
 .phase-LANDING                    { background:#f44336; }
 .phase-HOLDING                    { background:#9c27b0; }
 
-/* Runway status */
-.rwy-OPEN     { color: var(--green); font-weight: 600; }
-.rwy-CLOSED   { color: var(--red); font-weight: 600; }
-.rwy-OCCUPIED { color: var(--yellow); font-weight: 600; }
-
 /* Alerts */
 .alert-card { padding: 6px 8px; border-radius: 5px; margin-bottom: 5px; font-size: 0.75rem; }
+.alert-card .ts, .ho .ts { color: var(--dim); font-size: 0.68rem; margin-right: 4px; }
 .alert-CRITICAL { background: rgba(244,67,54,0.18); border-left: 3px solid var(--red); }
 .alert-WARNING  { background: rgba(255,152,0,0.15); border-left: 3px solid var(--yellow); }
 .alert-CAUTION  { background: rgba(255,152,0,0.10); border-left: 3px solid var(--yellow); }
 .alert-INFO     { background: rgba(78,168,222,0.10); border-left: 3px solid var(--accent); }
+#alerts-box { max-height: 200px; overflow-y: auto; }
 
-/* Event feed */
-#events { max-height: 180px; overflow-y: auto; font-size: 0.72rem;
-          background: var(--surface); border: 1px solid var(--border);
-          border-radius: 6px; padding: 6px; }
-.ev { padding: 2px 0; border-bottom: 1px solid rgba(45,49,64,0.5); }
+
 
 /* Counters */
 .counters td { padding: 1px 6px; border: none; font-size: 0.72rem; }
 .counters td:last-child { text-align: right; font-family: monospace; color: var(--accent); }
+
+/* Facility status */
+.fac-table td { padding: 2px 6px; border-bottom: 1px solid var(--border); font-size: 0.72rem; }
+.fac-table td:nth-child(3) { text-align: center; }
+.fac-table td:nth-child(4) { text-align: right; font-family: monospace; color: var(--accent); }
+.fac-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; }
+.fac-dot-ONLINE  { background: var(--green); box-shadow: 0 0 4px var(--green); }
+.fac-dot-OFFLINE { background: var(--red); box-shadow: 0 0 4px var(--red); }
+.fac-type { font-size: 0.6rem; color: var(--dim); text-transform: uppercase; }
 
 .empty { color: var(--dim); font-style: italic; padding: 8px; text-align: center; font-size: 0.78rem; }
 
@@ -524,12 +555,6 @@ tr.selected td { background: rgba(78,168,222,0.18); }
 .ho-flow { color: var(--dim); font-family: monospace; font-size: 0.68rem; }
 .ho-facility { font-size: 0.6rem; color: var(--dim); }
 
-/* ── Center colour legend ──────────────────────────────────────────────── */
-#center-legend { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
-.legend-chip { display: inline-flex; align-items: center; gap: 3px;
-              font-size: 0.65rem; padding: 1px 6px; border-radius: 3px;
-              background: var(--surface2); border: 1px solid var(--border); }
-.legend-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
 </style>
 </head>
 <body>
@@ -561,74 +586,83 @@ tr.selected td { background: rgba(78,168,222,0.18); }
 <div id="panel">
   <!-- Aircraft table -->
   <div class="section">
-    <div class="section-hdr">Aircraft <span class="badge" id="ac-count">0</span></div>
+    <div class="section-hdr" onclick="toggleSection(this)">Aircraft <span class="badge" id="ac-count">0</span></div>
+    <div class="section-body">
     <div class="table-wrap">
       <table><thead><tr><th>Callsign</th><th>Tail</th><th>Phase</th><th>Alt</th><th>Spd</th><th>Fuel</th><th>Lat</th><th>Lon</th></tr></thead>
       <tbody id="ac-body"></tbody></table>
+    </div>
     </div>
   </div>
 
   <!-- Weather -->
   <div class="section">
-    <div class="section-hdr">Weather</div>
+    <div class="section-hdr" onclick="toggleSection(this)">Weather</div>
+    <div class="section-body">
     <div class="table-wrap">
       <table><thead><tr><th>Airport</th><th>Cond</th><th>Wind</th><th>Vis</th><th>Ceil</th></tr></thead>
       <tbody id="wx-body"></tbody></table>
     </div>
+    </div>
   </div>
 
-  <!-- Runways -->
+  <!-- Facility Status -->
   <div class="section">
-    <div class="section-hdr">Runways</div>
+    <div class="section-hdr" onclick="toggleSection(this)">&#127959;&#65039; Facility Status <span class="badge" id="fac-online">0</span></div>
+    <div class="section-body">
     <div class="table-wrap">
-      <table><thead><tr><th>Airport</th><th>Rwy</th><th>Status</th></tr></thead>
-      <tbody id="rwy-body"></tbody></table>
+      <table class="fac-table"><thead><tr><th>Facility</th><th>Type</th><th>Status</th><th>Flights</th></tr></thead>
+      <tbody id="fac-body"></tbody></table>
+    </div>
     </div>
   </div>
 
   <!-- Flight Plans -->
   <div class="section">
-    <div class="section-hdr">Flight Plans <span class="badge" id="fp-count">0</span></div>
+    <div class="section-hdr" onclick="toggleSection(this)">Flight Plans <span class="badge" id="fp-count">0</span></div>
+    <div class="section-body">
     <div class="table-wrap">
       <table><thead><tr><th>Callsign</th><th>Route</th><th>Wpts</th><th>Status</th></tr></thead>
       <tbody id="fp-body"></tbody></table>
+    </div>
     </div>
   </div>
 
   <!-- Alerts -->
   <div class="section">
-    <div class="section-hdr">&#128680; Alerts <span class="badge" id="alert-count">0</span></div>
+    <div class="section-hdr" onclick="toggleSection(this)">&#128680; Alerts <span class="badge" id="alert-count">0</span></div>
+    <div class="section-body">
     <div id="alerts-box"></div>
+    </div>
   </div>
 
   <!-- Handoff Log -->
   <div class="section">
-    <div class="section-hdr">&#128260; Handoff Log <span class="badge" id="ho-count">0</span></div>
+    <div class="section-hdr" onclick="toggleSection(this)">&#128260; Handoff Log <span class="badge" id="ho-count">0</span></div>
+    <div class="section-body">
     <div id="handoff-log"><div class="empty">No handoffs yet</div></div>
-  </div>
-
-  <!-- Center Legend -->
-  <div class="section">
-    <div class="section-hdr">Controller Colours</div>
-    <div id="center-legend"></div>
-  </div>
-
-  <!-- Event feed -->
-  <div class="section">
-    <div class="section-hdr">Live Feed</div>
-    <div id="events"></div>
+    </div>
   </div>
 
   <!-- Counters -->
   <div class="section">
-    <div class="section-hdr">DDS Samples</div>
+    <div class="section-hdr" onclick="toggleSection(this)">DDS Samples</div>
+    <div class="section-body">
     <table class="counters" id="counters-table"></table>
+    </div>
   </div>
 </div>
 
 <script>
 /* ── Known airports (injected from scenario config) ──────────────── */
 var AIRPORTS = {{ airports_json | safe }};
+
+/* ── Timestamp formatter (epoch ms → HH:MM:SS) ──────────────────── */
+function fmtTs(ms) {
+  if (!ms) return "";
+  var d = new Date(ms);
+  return d.toTimeString().slice(0, 8);
+}
 
 /* ── Phase colours ───────────────────────────────────────────────── */
 var PHASE_COLOR = {
@@ -713,8 +747,7 @@ L.control.layers(null, {
   "TRACON": traconLayer
 }, { position: "bottomleft", collapsed: false }).addTo(map);
 
-/* ── Build center colour legend in panel ─────────────────────────── */
-buildCenterLegend();
+
 
 /* ── Airport markers (created dynamically when seen in data) ─────── */
 var airportMarkers = {};
@@ -770,6 +803,10 @@ function togglePanel() {
   t.classList.toggle("collapsed");
   t.innerHTML = p.classList.contains("collapsed") ? "&rsaquo;" : "&lsaquo;";
   setTimeout(function() { map.invalidateSize(); }, 350);
+}
+
+function toggleSection(hdr) {
+  hdr.parentElement.classList.toggle("collapsed");
 }
 
 /* ── Waypoint route helpers ───────────────────────────────────────── */
@@ -857,23 +894,13 @@ function renderHandoffLog(entries) {
   if (!entries.length) { el.innerHTML = '<div class="empty">No handoffs yet</div>'; return; }
   var rows = entries.slice(-30).reverse().map(function(h) {
     return '<div class="ho">' +
+      '<span class="ts">' + fmtTs(h.ts) + '</span>' +
       '<span class="ho-tail">' + h.tail_number + '</span>' +
       '<span class="ho-flow">' + h.from + ' &rarr; ' + h.to + '</span>' +
       '<span class="ho-status ho-' + h.status + '">' + h.status + '</span>' +
-      (h.from_facility || h.to_facility ?
-        '<span class="ho-facility">[' + (h.from_facility||'?') + '&rarr;' + (h.to_facility||'?') + ']</span>' : '') +
       '</div>';
   }).join("");
   el.innerHTML = rows;
-}
-
-/* ── Center legend builder ───────────────────────────────────────── */
-function buildCenterLegend() {
-  var el = document.getElementById("center-legend");
-  el.innerHTML = CENTERS.map(function(c) {
-    var col = CENTER_COLORS[c.id] || "#4fc3f7";
-    return '<span class="legend-chip"><span class="legend-dot" style="background:' + col + '"></span>' + c.id + '</span>';
-  }).join("");
 }
 
 /* ── Render helpers ──────────────────────────────────────────────── */
@@ -1059,12 +1086,6 @@ function update(d) {
            "<td>" + w.wind + "</td><td>" + w.vis_m + "</td><td>" + w.ceiling_ft + "</td></tr>";
   }).join(""));
 
-  // Runway table
-  renderTable("rwy-body", d.runways.map(function(r) {
-    return "<tr><td>" + r.airport + "</td><td>" + r.runway + "</td>" +
-           '<td><span class="rwy-' + r.status + '">' + r.status + "</span></td></tr>";
-  }).join(""));
-
   // Flight plans table
   lastFlightPlans = d.flight_plans;
   document.getElementById("fp-count").textContent = d.flight_plans.length;
@@ -1083,16 +1104,10 @@ function update(d) {
   var ab = document.getElementById("alerts-box");
   if (d.alerts.length) {
     ab.innerHTML = d.alerts.map(function(a) {
-      return '<div class="alert-card alert-' + a.severity + '"><strong>' + a.type +
+      return '<div class="alert-card alert-' + a.severity + '"><span class="ts">' + fmtTs(a.ts) + '</span> <strong>' + a.type +
              "</strong> &mdash; " + a.message + (a.aircraft ? " (" + a.aircraft + ")" : "") + "</div>";
     }).join("");
   } else { ab.innerHTML = '<div class="empty">No alerts</div>'; }
-
-  // Events
-  var ev = document.getElementById("events");
-  if (d.events.length) {
-    ev.innerHTML = d.events.map(function(e) { return '<div class="ev">' + e + "</div>"; }).join("");
-  } else { ev.innerHTML = '<div class="empty">Waiting for DDS data&hellip;</div>'; }
 
   // Handoff log
   if (d.handoff_log) renderHandoffLog(d.handoff_log);
@@ -1103,10 +1118,30 @@ function update(d) {
   // Counters
   var ct = document.getElementById("counters-table");
   var names = ["AircraftPosition","ControllerInstruction","PilotAcknowledgment",
-               "FlightPlan","RunwayStatus","WeatherReport","Handoff","Alert","AircraftTracking"];
+               "FlightPlan","RunwayStatus","WeatherReport","Handoff","Alert","AircraftTracking","FacilityStatus"];
   ct.innerHTML = names.map(function(n) {
     return "<tr><td>" + n + "</td><td>" + (d.counters[n] || 0) + "</td></tr>";
   }).join("");
+
+  // Facility Status
+  if (d.facility_status) {
+    var fb = document.getElementById("fac-body");
+    var onlineCount = 0;
+    fb.innerHTML = d.facility_status.map(function(f) {
+      if (f.status === "ONLINE") onlineCount++;
+      var dot = '<span class="fac-dot fac-dot-' + f.status + '"></span>';
+      var swatch = '';
+      if (f.facility_type === 'CENTER') {
+        var col = CENTER_COLORS[f.facility_id] || '#4fc3f7';
+        swatch = '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + col + ';margin-right:4px;vertical-align:middle"></span>';
+      }
+      return '<tr><td>' + swatch + f.facility_id + '</td><td><span class="fac-type">' +
+             f.facility_type + '</span></td><td>' + dot + '</td><td>' +
+             f.tracked + '</td></tr>';
+    }).join("");
+    document.getElementById("fac-online").textContent =
+      onlineCount + "/" + d.facility_status.length;
+  }
 }
 
 /* ── SSE connection ──────────────────────────────────────────────── */
@@ -1152,6 +1187,7 @@ speedSlider.addEventListener("input", function() {
 # ── Main ────────────────────────────────────────────────────────────────────
 
 def init_dds():
+    from common import initial_sim_speed, set_sim_speed
     qos_provider = load_qos_provider()
     dp_partitions = ["OPS/*"]
     participant = create_participant(
@@ -1160,6 +1196,8 @@ def init_dds():
         participant_name="Dashboard",
         app_name="ATC_Dashboard",
     )
+    # Set initial sim speed as a propagated participant property
+    set_sim_speed(participant, initial_sim_speed())
     subscriber = create_subscriber(participant)
     readers = {}
     for topic_name, (type_cls, profile) in TOPIC_MAP.items():
@@ -1168,7 +1206,7 @@ def init_dds():
             subscriber, topic,
             reader_qos(qos_provider, profile),
         )
-    return readers
+    return participant, readers
 
 
 def main():
@@ -1177,7 +1215,8 @@ def main():
     parser.add_argument("--host", default="0.0.0.0", help="Bind address")
     args = parser.parse_args()
 
-    readers = init_dds()
+    participant, readers = init_dds()
+    app.config["dds_participant"] = participant
     t = threading.Thread(target=dds_poll_loop, args=(readers,), daemon=True)
     t.start()
 

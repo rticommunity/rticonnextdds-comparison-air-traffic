@@ -230,6 +230,28 @@
                     </period>
                 </deadline>
             </datareader_qos>
+
+            <!-- FacilityStatus: manual-by-topic liveliness so dashboard
+                 can detect facility crashes within 5 seconds -->
+            <datawriter_qos topic_filter="FacilityStatus">
+                <liveliness>
+                    <kind>MANUAL_BY_TOPIC_LIVELINESS_QOS</kind>
+                    <lease_duration>
+                        <sec>5</sec>
+                        <nanosec>0</nanosec>
+                    </lease_duration>
+                </liveliness>
+            </datawriter_qos>
+
+            <datareader_qos topic_filter="FacilityStatus">
+                <liveliness>
+                    <kind>MANUAL_BY_TOPIC_LIVELINESS_QOS</kind>
+                    <lease_duration>
+                        <sec>5</sec>
+                        <nanosec>0</nanosec>
+                    </lease_duration>
+                </liveliness>
+            </datareader_qos>
         </qos_profile>
 
         <!--

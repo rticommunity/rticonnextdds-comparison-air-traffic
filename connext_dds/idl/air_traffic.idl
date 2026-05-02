@@ -292,6 +292,19 @@ module NationalAirTrafficControl {
         Timestamp acquired_at;
     };
 
+    // FacilityStatus — per-facility heartbeat & workload.
+    // Keyed by facility_id so instance lifecycle tracks presence.
+    // Writers use MANUAL_BY_TOPIC liveliness (5 s lease).
+    @topic
+    @mutable
+    struct FacilityStatus {
+        @key ShortText facility_id;     // e.g. "ZNY", "N90", "KJFK"
+        FacilityType facility_type;     // TOWER, TRACON, CENTER
+        ControllerId controller_id;
+        uint32 tracked_aircraft_count;
+        Timestamp last_updated;
+    };
+
     // ─── Request/Reply Types ───────────────────────────────
 
     @mutable

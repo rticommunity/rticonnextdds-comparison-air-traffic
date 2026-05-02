@@ -476,6 +476,24 @@ class NationalAirTrafficControl_AircraftTracking:
 NationalAirTrafficControl.AircraftTracking = NationalAirTrafficControl_AircraftTracking
 
 @idl.struct(
+    type_annotations = [idl.mutable, idl.type_name("NationalAirTrafficControl::FacilityStatus"), ],
+
+    member_annotations = {
+        'facility_id': [idl.key, idl.bound(NationalAirTrafficControl.MAX_TEXT_LEN),],
+        'facility_type': [idl.default(0),],
+        'controller_id': [idl.bound(NationalAirTrafficControl.MAX_CONTROLLER_ID_LEN),],
+    }
+)
+class NationalAirTrafficControl_FacilityStatus:
+    facility_id: str = ""
+    facility_type: NationalAirTrafficControl.FacilityType = NationalAirTrafficControl.FacilityType.TOWER
+    controller_id: str = ""
+    tracked_aircraft_count: idl.uint32 = 0
+    last_updated: int = 0
+
+NationalAirTrafficControl.FacilityStatus = NationalAirTrafficControl_FacilityStatus
+
+@idl.struct(
     type_annotations = [idl.mutable, idl.type_name("NationalAirTrafficControl::FlightPlanRequest"), ])
 class NationalAirTrafficControl_FlightPlanRequest:
     plan: NationalAirTrafficControl.FlightPlan = field(default_factory = NationalAirTrafficControl.FlightPlan)
