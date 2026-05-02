@@ -31,6 +31,7 @@ AircraftPosition = ATC.AircraftPosition
 Alert = ATC.Alert
 ControllerInstruction = ATC.ControllerInstruction
 ConvectiveCell = ATC.ConvectiveCell
+ConvectiveSeverity = ATC.ConvectiveSeverity
 FlightPlan = ATC.FlightPlan
 Handoff = ATC.Handoff
 PilotAcknowledgment = ATC.PilotAcknowledgment
@@ -40,9 +41,13 @@ AircraftTracking = ATC.AircraftTracking
 FacilityStatus = ATC.FacilityStatus
 from common import (
     create_participant,
+    create_publisher,
     create_subscriber,
     load_qos_provider,
+    make_id,
+    now_ms,
     reader_qos,
+    writer_qos,
 )
 
 # ── Topic → (type, qos profile) ────────────────────────────────────────────
@@ -114,6 +119,11 @@ _pub_to_facility: dict = {}
 
 _spawned_procs: dict[str, subprocess.Popen] = {}  # callsign → Popen
 _spawned_lock = threading.Lock()
+
+# ── Dashboard-injected weather cells ────────────────────────────────────────
+_injected_cells: set[str] = set()          # cell_ids we published
+_cell_cancel: dict[str, threading.Event] = {}  # cell_id → cancel event
+_cell_lock = threading.Lock()
 
 _AIRPLANE_SCRIPT = os.path.join(
     os.path.dirname(__file__), "..", "airplane_app", "airplane.py"
@@ -410,6 +420,98 @@ def list_airports():
     return {"airports": _AIRPORT_CODES}
 
 
+@app.route("/weather_cell", methods=["POST"])
+def create_weather_cell():
+    """Publish a manually-created ConvectiveCell via DDS."""
+    from common import get_sim_speed
+    data = request.get_json(silent=True) or {}
+    try:
+        lat = float(data.get("lat", 0))
+        lon = float(data.get("lon", 0))
+        radius = float(data.get("radius", 20))
+        severity = data.get("severity", "MODERATE").upper()
+        top_alt = int(data.get("top_alt", 45000))
+        base_alt = int(data.get("base_alt", 5000))
+        hdg = float(data.get("heading", 0))
+        spd = float(data.get("speed", 0))
+        duration_min = float(data.get("duration_min", 30))
+    except (TypeError, ValueError) as exc:
+        return {"error": f"Invalid parameter: {exc}"}, 400
+
+    if not (-90 <= lat <= 90) or not (-180 <= lon <= 180):
+        return {"error": "lat must be -90..90, lon -180..180"}, 400
+    if radius <= 0 or radius > 200:
+        return {"error": "radius must be 1..200 nm"}, 400
+    if duration_min <= 0 or duration_min > 600:
+        return {"error": "duration must be 1..600 sim-minutes"}, 400
+    sev_map = {"MODERATE": ConvectiveSeverity.MODERATE,
+               "SEVERE": ConvectiveSeverity.SEVERE,
+               "EXTREME": ConvectiveSeverity.EXTREME}
+    if severity not in sev_map:
+        return {"error": f"severity must be one of {list(sev_map)}"}, 400
+
+    cell_id = make_id("WX-")
+    sample = ConvectiveCell(
+        cell_id=cell_id,
+        center_latitude=lat,
+        center_longitude=lon,
+        radius_nm=radius,
+        top_altitude_ft=top_alt,
+        base_altitude_ft=base_alt,
+        severity=sev_map[severity],
+        movement_heading_deg=hdg,
+        movement_speed_knots=spd,
+        observation_time=now_ms(),
+    )
+    wx_writer = app.config["wx_writer"]
+    wx_writer.write(sample)
+
+    cancel_evt = threading.Event()
+    with _cell_lock:
+        _injected_cells.add(cell_id)
+        _cell_cancel[cell_id] = cancel_evt
+
+    # Schedule dispose after duration_min sim-minutes
+    participant = app.config["dds_participant"]
+    def _dispose_cell():
+        sim_seconds = duration_min * 60
+        elapsed = 0.0
+        while elapsed < sim_seconds:
+            if cancel_evt.is_set():
+                return  # manually removed
+            spd_mult = max(get_sim_speed(participant), 1)
+            time.sleep(1.0)
+            elapsed += spd_mult
+        if not cancel_evt.is_set():
+            ih = wx_writer.lookup_instance(ConvectiveCell(cell_id=cell_id))
+            if ih is not None:
+                wx_writer.dispose_instance(ih)
+        with _cell_lock:
+            _injected_cells.discard(cell_id)
+            _cell_cancel.pop(cell_id, None)
+    threading.Thread(target=_dispose_cell, daemon=True).start()
+
+    return {"cell_id": cell_id, "lat": lat, "lon": lon, "radius": radius,
+            "severity": severity, "duration_min": duration_min}
+
+
+@app.route("/weather_cell/<cell_id>", methods=["DELETE"])
+def remove_weather_cell(cell_id):
+    """Dispose a dashboard-injected ConvectiveCell."""
+    with _cell_lock:
+        if cell_id not in _injected_cells:
+            return {"error": "Cell not found or not dashboard-injected"}, 404
+        evt = _cell_cancel.pop(cell_id, None)
+        _injected_cells.discard(cell_id)
+    if evt:
+        evt.set()  # cancel the timer thread
+    wx_writer = app.config["wx_writer"]
+    ih = wx_writer.lookup_instance(ConvectiveCell(cell_id=cell_id))
+    if ih is not None:
+        wx_writer.dispose_instance(ih)
+    return {"removed": cell_id}
+
+
 @app.route("/aircraft", methods=["POST"])
 def spawn_aircraft():
     """Spawn a new airplane subprocess on the fly."""
@@ -533,6 +635,9 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-
           font-size: 0.75rem; color: var(--dim); }
 #status .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
                background: var(--green); margin-right: 4px; vertical-align: middle; }
+#mouse-coords { cursor: pointer; margin-left: 12px; font-family: monospace;
+  color: var(--dim); border-left: 1px solid var(--border); padding-left: 10px; }
+#mouse-coords:hover { color: var(--accent); }
 
 /* ── Side panel ──────────────────────────────────────────────────────── */
 #panel {
@@ -730,7 +835,7 @@ tr.selected td { background: rgba(78,168,222,0.18); }
     <span id="speed-value">1x</span>
   </div>
 </div>
-<div id="status"><span class="dot"></span>Connected</div>
+<div id="status"><span class="dot"></span>Connected<span id="mouse-coords" title="Click to fill WX form">---, ---</span></div>
 
 <!-- Map -->
 <div id="map"></div>
@@ -740,6 +845,49 @@ tr.selected td { background: rgba(78,168,222,0.18); }
 
 <!-- Side panel -->
 <div id="panel">
+  <!-- Add Weather Cell -->
+  <div class="section">
+    <div class="section-hdr" onclick="toggleSection(this)">&#9928; Add Weather Cell</div>
+    <div class="section-body">
+    <div class="spawn-form">
+      <div class="form-row">
+        <label for="wx-lat">Latitude</label>
+        <input id="wx-lat" type="number" step="0.1" min="-90" max="90" value="36.0">
+      </div>
+      <div class="form-row">
+        <label for="wx-lon">Longitude</label>
+        <input id="wx-lon" type="number" step="0.1" min="-180" max="180" value="-95.0">
+      </div>
+      <div class="form-row">
+        <label for="wx-radius">Radius (nm)</label>
+        <input id="wx-radius" type="number" step="1" min="1" max="200" value="20">
+      </div>
+      <div class="form-row">
+        <label for="wx-sev">Severity</label>
+        <select id="wx-sev">
+          <option value="MODERATE">Moderate</option>
+          <option value="SEVERE" selected>Severe</option>
+          <option value="EXTREME">Extreme</option>
+        </select>
+      </div>
+      <div class="form-row">
+        <label for="wx-hdg">Move Hdg</label>
+        <input id="wx-hdg" type="number" step="1" min="0" max="360" value="90">
+      </div>
+      <div class="form-row">
+        <label for="wx-spd">Move Spd (kt)</label>
+        <input id="wx-spd" type="number" step="1" min="0" max="100" value="15">
+      </div>
+      <div class="form-row">
+        <label for="wx-dur">Duration (sim-min)</label>
+        <input id="wx-dur" type="number" step="5" min="1" max="600" value="30">
+      </div>
+      <button id="wx-btn" onclick="spawnWeatherCell()">Inject Cell</button>
+      <div id="wx-msg"></div>
+    </div>
+    </div>
+  </div>
+
   <!-- Add Aircraft -->
   <div class="section">
     <div class="section-hdr" onclick="toggleSection(this)">&#128747; Add Aircraft</div>
@@ -863,6 +1011,22 @@ var map = L.map("map", {
 L.control.zoom({ position: "bottomleft" }).addTo(map);
 L.control.attribution({ position: "bottomleft", prefix: false }).addTo(map);
 
+// Mouse coordinate display
+var _lastMouseLatLng = null;
+map.on("mousemove", function(e) {
+  _lastMouseLatLng = e.latlng;
+  document.getElementById("mouse-coords").textContent =
+    e.latlng.lat.toFixed(2) + ", " + e.latlng.lng.toFixed(2);
+});
+document.getElementById("mouse-coords").addEventListener("click", function() {
+  if (_lastMouseLatLng) {
+    var latInput = document.getElementById("wx-lat");
+    var lonInput = document.getElementById("wx-lon");
+    if (latInput) latInput.value = _lastMouseLatLng.lat.toFixed(2);
+    if (lonInput) lonInput.value = _lastMouseLatLng.lng.toFixed(2);
+  }
+});
+
 // CartoDB dark tiles — free, no API key
 L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
   attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/">CARTO</a>',
@@ -899,10 +1063,9 @@ CENTERS.forEach(function(c) {
   var poly = L.polygon(c.boundary, {
     color: color, weight: 1.5, opacity: 0.6,
     fillColor: color, fillOpacity: 0.04,
-    dashArray: "6 4", bubblingMouseEvents: false
+    dashArray: "6 4", bubblingMouseEvents: true
   });
   poly.bindTooltip(c.id + " — " + c.name, { sticky: true, className: "airspace-tooltip" });
-  poly.on('click', function(e) { L.DomEvent.stopPropagation(e); });
   centerLayer.addLayer(poly);
   centerPolygons[c.id] = poly;
 });
@@ -951,6 +1114,12 @@ function renderWeatherCells(cells) {
         "<br>FL" + Math.round(c.base_alt/100) + "-FL" + Math.round(c.top_alt/100) +
         "<br>r=" + c.radius_nm + "nm &bull; " + c.speed_kt + "kt HDG" + Math.round(c.heading),
         { sticky: true, className: "wx-cell-tooltip" }
+      );
+      circle.bindPopup(
+        "<strong>" + c.severity + "</strong> " + c.cell_id +
+        "<br>r=" + c.radius_nm + "nm FL" + Math.round(c.base_alt/100) + "-FL" + Math.round(c.top_alt/100) +
+        '<br><button onclick="removeWeatherCell(\'' + c.cell_id + '\')" style="margin-top:4px;padding:3px 10px;' +
+        'background:#f44336;color:#fff;border:none;border-radius:3px;cursor:pointer;font-size:12px">Remove Cell</button>'
       );
       weatherLayer.addLayer(circle);
       weatherCircles[c.cell_id] = circle;
@@ -1418,6 +1587,48 @@ speedSlider.addEventListener("input", function() {
   if (codes.length > 1) destSel.selectedIndex = 1;
 })();
 
+function removeWeatherCell(cellId) {
+  fetch("/weather_cell/" + encodeURIComponent(cellId), { method: "DELETE" })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      if (d.error) { console.warn("Remove cell:", d.error); }
+      else { map.closePopup(); }
+    }).catch(function(e) { console.error("Remove cell error:", e); });
+}
+
+function spawnWeatherCell() {
+  var msg = document.getElementById("wx-msg");
+  var btn = document.getElementById("wx-btn");
+  msg.textContent = ""; msg.className = "";
+  var lat = parseFloat(document.getElementById("wx-lat").value);
+  var lon = parseFloat(document.getElementById("wx-lon").value);
+  if (isNaN(lat) || isNaN(lon)) { msg.textContent = "Enter valid coordinates"; msg.className = "err"; return; }
+  btn.disabled = true;
+  fetch("/weather_cell", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({
+      lat: lat, lon: lon,
+      radius: parseFloat(document.getElementById("wx-radius").value) || 20,
+      severity: document.getElementById("wx-sev").value,
+      heading: parseFloat(document.getElementById("wx-hdg").value) || 0,
+      speed: parseFloat(document.getElementById("wx-spd").value) || 0,
+      duration_min: parseFloat(document.getElementById("wx-dur").value) || 30,
+      top_alt: 45000, base_alt: 5000
+    })
+  }).then(function(r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
+    .then(function(res) {
+      btn.disabled = false;
+      if (res.ok) {
+        msg.textContent = res.data.severity + " cell at " + res.data.lat.toFixed(1) + ", " + res.data.lon.toFixed(1) + " (" + res.data.duration_min + " sim-min)";
+        msg.className = "ok";
+      } else {
+        msg.textContent = res.data.error || "Failed";
+        msg.className = "err";
+      }
+    }).catch(function(e) { btn.disabled = false; msg.textContent = "Network error"; msg.className = "err"; });
+}
+
 function spawnAircraft() {
   var cs = document.getElementById("spawn-cs").value.trim().toUpperCase();
   var orig = document.getElementById("spawn-orig").value;
@@ -1445,6 +1656,18 @@ function spawnAircraft() {
       }
     }).catch(function(e) { btn.disabled = false; msg.textContent = "Network error"; msg.className = "err"; });
 }
+
+// Map click → fill WX form coordinates
+map.on("click", function(e) {
+  var latInput = document.getElementById("wx-lat");
+  var lonInput = document.getElementById("wx-lon");
+  if (latInput && lonInput) {
+    latInput.value = e.latlng.lat.toFixed(2);
+    lonInput.value = e.latlng.lng.toFixed(2);
+    var mc = document.getElementById("mouse-coords");
+    if (mc) { mc.style.color = "#00e5ff"; setTimeout(function(){ mc.style.color = ""; }, 400); }
+  }
+});
 </script>
 </body>
 </html>"""
@@ -1472,7 +1695,14 @@ def init_dds():
             subscriber, topic,
             reader_qos(qos_provider, profile),
         )
-    return participant, readers
+    # ConvectiveCell writer for manual weather injection (reuse existing topic)
+    publisher = create_publisher(participant)
+    wx_topic = dds.Topic.find(participant, "ConvectiveCell")
+    wx_writer = dds.DataWriter(
+        publisher, wx_topic,
+        writer_qos(qos_provider, "StateDataProfile"),
+    )
+    return participant, readers, wx_writer
 
 
 def main():
@@ -1481,8 +1711,9 @@ def main():
     parser.add_argument("--host", default="0.0.0.0", help="Bind address")
     args = parser.parse_args()
 
-    participant, readers = init_dds()
+    participant, readers, wx_writer = init_dds()
     app.config["dds_participant"] = participant
+    app.config["wx_writer"] = wx_writer
     t = threading.Thread(target=dds_poll_loop, args=(readers,), daemon=True)
     t.start()
 
