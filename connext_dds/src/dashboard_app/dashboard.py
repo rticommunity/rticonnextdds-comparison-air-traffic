@@ -10,8 +10,11 @@ Run with:
 """
 
 import argparse
+import atexit
 import json
 import os
+import signal
+import subprocess
 import sys
 import threading
 import time
@@ -103,6 +106,30 @@ state = {
 
 # publication_handle → facility_id  (built from FacilityStatus samples)
 _pub_to_facility: dict = {}
+
+# ── Spawned aircraft processes ──────────────────────────────────────────────
+
+_spawned_procs: dict[str, subprocess.Popen] = {}  # callsign → Popen
+_spawned_lock = threading.Lock()
+
+_AIRPLANE_SCRIPT = os.path.join(
+    os.path.dirname(__file__), "..", "airplane_app", "airplane.py"
+)
+_AIRPORT_CODES = [a["code"] for a in _scenario_cfg["airports"]]
+
+
+def _cleanup_spawned():
+    """Kill all spawned aircraft subprocesses."""
+    with _spawned_lock:
+        for cs, proc in _spawned_procs.items():
+            try:
+                proc.terminate()
+            except OSError:
+                pass
+        _spawned_procs.clear()
+
+
+atexit.register(_cleanup_spawned)
 
 
 # ── DDS → dict helpers ─────────────────────────────────────────────────────
@@ -339,6 +366,65 @@ def get_speed():
     return {"speed": get_sim_speed(participant)}
 
 
+@app.route("/airports")
+def list_airports():
+    return {"airports": _AIRPORT_CODES}
+
+
+@app.route("/aircraft", methods=["POST"])
+def spawn_aircraft():
+    """Spawn a new airplane subprocess on the fly."""
+    data = request.get_json(silent=True) or {}
+    callsign = data.get("callsign", "").strip().upper()
+    origin = data.get("origin", "").strip().upper()
+    destination = data.get("destination", "").strip().upper()
+
+    if not callsign or not origin or not destination:
+        return {"error": "callsign, origin, and destination are required"}, 400
+    if origin == destination:
+        return {"error": "origin and destination must differ"}, 400
+    if origin not in _AIRPORT_CODES or destination not in _AIRPORT_CODES:
+        return {"error": f"unknown airport code"}, 400
+
+    with _spawned_lock:
+        if callsign in _spawned_procs:
+            proc = _spawned_procs[callsign]
+            if proc.poll() is None:
+                return {"error": f"{callsign} is already running"}, 409
+
+    python = sys.executable
+    cmd = [
+        python, _AIRPLANE_SCRIPT,
+        "--callsign", callsign,
+        "--origin", origin,
+        "--destination", destination,
+        "--duration", "3600",
+    ]
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    with _spawned_lock:
+        _spawned_procs[callsign] = proc
+
+    return {"callsign": callsign, "origin": origin, "destination": destination, "pid": proc.pid}
+
+
+@app.route("/aircraft")
+def list_spawned():
+    """List dynamically spawned aircraft and their status."""
+    with _spawned_lock:
+        result = []
+        for cs, proc in _spawned_procs.items():
+            result.append({
+                "callsign": cs,
+                "pid": proc.pid,
+                "running": proc.poll() is None,
+            })
+    return {"spawned": result}
+
+
 @app.route("/stream")
 def stream():
     def generate():
@@ -489,6 +575,27 @@ tr.selected td { background: rgba(78,168,222,0.18); }
 
 .empty { color: var(--dim); font-style: italic; padding: 8px; text-align: center; font-size: 0.78rem; }
 
+/* ── Spawn aircraft form ─────────────────────────────────────────── */
+.spawn-form { display: flex; flex-direction: column; gap: 6px; }
+.form-row { display: flex; align-items: center; gap: 8px; }
+.form-row label { font-size: 0.72rem; color: var(--dim); min-width: 70px; text-transform: uppercase;
+                  letter-spacing: 0.4px; }
+.form-row input, .form-row select {
+  flex: 1; background: var(--surface2); color: var(--text); border: 1px solid var(--border);
+  border-radius: 4px; padding: 5px 8px; font-size: 0.78rem; font-family: inherit;
+}
+.form-row input:focus, .form-row select:focus { outline: none; border-color: var(--accent); }
+#spawn-btn {
+  margin-top: 4px; padding: 6px 0; border: none; border-radius: 5px;
+  background: var(--accent); color: #000; font-weight: 700; font-size: 0.8rem;
+  cursor: pointer; letter-spacing: 0.4px;
+}
+#spawn-btn:hover { background: #6bc0f0; }
+#spawn-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+#spawn-msg { font-size: 0.72rem; min-height: 1.2em; }
+#spawn-msg.ok { color: var(--green); }
+#spawn-msg.err { color: var(--red); }
+
 /* ── Aircraft label on map ───────────────────────────────────────────── */
 .aircraft-label {
   background: rgba(15,17,23,0.85); color: #fff; padding: 2px 6px;
@@ -584,6 +691,29 @@ tr.selected td { background: rgba(78,168,222,0.18); }
 
 <!-- Side panel -->
 <div id="panel">
+  <!-- Add Aircraft -->
+  <div class="section">
+    <div class="section-hdr" onclick="toggleSection(this)">&#128747; Add Aircraft</div>
+    <div class="section-body">
+    <div class="spawn-form">
+      <div class="form-row">
+        <label for="spawn-cs">Callsign</label>
+        <input id="spawn-cs" type="text" maxlength="10" placeholder="e.g. UAL999">
+      </div>
+      <div class="form-row">
+        <label for="spawn-orig">Origin</label>
+        <select id="spawn-orig"></select>
+      </div>
+      <div class="form-row">
+        <label for="spawn-dest">Destination</label>
+        <select id="spawn-dest"></select>
+      </div>
+      <button id="spawn-btn" onclick="spawnAircraft()">Launch</button>
+      <div id="spawn-msg"></div>
+    </div>
+    </div>
+  </div>
+
   <!-- Aircraft table -->
   <div class="section">
     <div class="section-hdr" onclick="toggleSection(this)">Aircraft <span class="badge" id="ac-count">0</span></div>
@@ -1179,6 +1309,46 @@ speedSlider.addEventListener("input", function() {
     });
   }, 100);
 });
+
+/* ── Add Aircraft form ───────────────────────────────────────────── */
+(function() {
+  var codes = Object.keys(AIRPORTS).sort();
+  var origSel = document.getElementById("spawn-orig");
+  var destSel = document.getElementById("spawn-dest");
+  codes.forEach(function(c) {
+    origSel.add(new Option(c + " — " + AIRPORTS[c].name, c));
+    destSel.add(new Option(c + " — " + AIRPORTS[c].name, c));
+  });
+  if (codes.length > 1) destSel.selectedIndex = 1;
+})();
+
+function spawnAircraft() {
+  var cs = document.getElementById("spawn-cs").value.trim().toUpperCase();
+  var orig = document.getElementById("spawn-orig").value;
+  var dest = document.getElementById("spawn-dest").value;
+  var msg = document.getElementById("spawn-msg");
+  var btn = document.getElementById("spawn-btn");
+  msg.textContent = ""; msg.className = "";
+  if (!cs) { msg.textContent = "Enter a callsign"; msg.className = "err"; return; }
+  if (orig === dest) { msg.textContent = "Select different airports"; msg.className = "err"; return; }
+  btn.disabled = true;
+  fetch("/aircraft", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({callsign: cs, origin: orig, destination: dest})
+  }).then(function(r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
+    .then(function(res) {
+      btn.disabled = false;
+      if (res.ok) {
+        msg.textContent = res.data.callsign + " launched: " + res.data.origin + " → " + res.data.destination;
+        msg.className = "ok";
+        document.getElementById("spawn-cs").value = "";
+      } else {
+        msg.textContent = res.data.error || "Failed";
+        msg.className = "err";
+      }
+    }).catch(function(e) { btn.disabled = false; msg.textContent = "Network error"; msg.className = "err"; });
+}
 </script>
 </body>
 </html>"""
