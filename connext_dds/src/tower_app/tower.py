@@ -73,7 +73,12 @@ class TowerController:
         dp_partitions = [f"OPS/AIRPORT/{airport_code}", "OPS/FPS/*"]
         if serving_tracon:
             dp_partitions.append(f"OPS/TERMINAL/{serving_tracon}")
-        self.participant = create_participant(self.qos_provider, dp_partitions=dp_partitions)
+        self.participant = create_participant(
+            self.qos_provider,
+            dp_partitions=dp_partitions,
+            participant_name=f"Tower_{airport_code}",
+            app_name="ATC_Tower",
+        )
 
         self.publisher = create_publisher(self.participant)
         self.subscriber = create_subscriber(self.participant)

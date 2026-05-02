@@ -71,9 +71,10 @@ def signal_handler(_sig, _frame):
 signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 
-# Pad bounding box by this many degrees so CFT captures aircraft
-# approaching the boundary (not just inside it).
-BBOX_PAD_DEG = 0.5
+# Pad bounding box generously so CFT captures aircraft approaching or
+# exiting the boundary.  At max sim speed (50×) an aircraft moves ~0.14°/s,
+# so 3° gives ~20 s of margin for handoff detection.
+BBOX_PAD_DEG = 3.0
 
 
 class EnRouteCenter:
@@ -99,10 +100,18 @@ class EnRouteCenter:
 
         # Aircraft we are responsible for (accepted handoff)
         self.controlled_aircraft: dict[str, AircraftPosition] = {}
+        # Timestamp of last position update per controlled aircraft
+        self.last_seen: dict[str, float] = {}
+        # Timestamp when each aircraft was first acquired (for grace period)
+        self.acquired_at: dict[str, float] = {}
         # Aircraft we've already handed off (avoid re-triggering)
         self.handed_off: set[str] = set()
+        # Aircraft we've confirmed inside our polygon (prevents premature handoff)
+        self.seen_inside: set[str] = set()
         # Aircraft we've already alerted about (avoid spam)
         self.alerted_uncoordinated: set[str] = set()
+        # Grace period (seconds) before forwarding a never-entered aircraft
+        self.NEVER_ENTERED_GRACE_S = 30.0
 
         # Compute bounding box for the CFT geographic filter
         min_lat, max_lat, min_lon, max_lon = polygon_bbox(boundary)
@@ -120,7 +129,12 @@ class EnRouteCenter:
             "OPS/ENROUTE/*",   # cross-center handoffs
             "OPS/FPS/*",
         ]
-        self.participant = create_participant(self.qos_provider, dp_partitions=dp_partitions)
+        self.participant = create_participant(
+            self.qos_provider,
+            dp_partitions=dp_partitions,
+            participant_name=f"Center_{center_id}",
+            app_name="ATC_Center",
+        )
 
         self.publisher = create_publisher(self.participant)
         self.subscriber = create_subscriber(self.participant)
@@ -215,6 +229,7 @@ class EnRouteCenter:
 
     def monitor_traffic(self):
         """Read positions from CFT, classify as controlled / exiting / uncoordinated."""
+        seen_this_cycle: set[str] = set()
         for sample in self.pos_reader.take_data():
             tail = sample.tail_number
             inside = point_in_polygon(
@@ -222,17 +237,65 @@ class EnRouteCenter:
             )
 
             if tail in self.controlled_aircraft:
+                seen_this_cycle.add(tail)
+                self.last_seen[tail] = time.time()
+                # Always update position — we are the controller of record
+                self.controlled_aircraft[tail] = sample
                 if inside:
-                    # Normal: update position for our controlled aircraft
-                    self.controlled_aircraft[tail] = sample
-                else:
-                    # Aircraft left our polygon → initiate handoff
-                    if tail not in self.handed_off:
+                    self.seen_inside.add(tail)
+                elif tail not in self.handed_off:
+                    if tail in self.seen_inside:
+                        # Was inside, now outside → hand off
                         self._handoff_exiting_aircraft(sample)
+                    else:
+                        # Never entered our polygon — after grace period, check
+                        # if it's actually in another center and forward it
+                        acq = self.acquired_at.get(tail, time.time())
+                        if (time.time() - acq) > self.NEVER_ENTERED_GRACE_S:
+                            neighbor = find_center_for_position(
+                                sample.position.latitude, sample.position.longitude,
+                                self.all_boundaries, exclude=self.center_id,
+                            )
+                            if neighbor:
+                                log.info(
+                                    "Aircraft %s never entered %s (in %s after %.0fs) — forwarding",
+                                    tail, self.center_id, neighbor, time.time() - acq,
+                                )
+                                self._handoff_exiting_aircraft(sample)
             elif inside and tail not in self.handed_off:
                 # Aircraft in our polygon but not handed off to us → alert
                 if tail not in self.alerted_uncoordinated:
                     self._alert_uncoordinated(sample)
+
+        # Check for controlled aircraft that disappeared from CFT (flew beyond bbox)
+        now = time.time()
+        stale_threshold = 3.0  # seconds without an update
+        for tail in list(self.controlled_aircraft):
+            if tail in self.handed_off or tail in seen_this_cycle:
+                continue
+            last_pos = self.controlled_aircraft[tail]
+            last_t = self.last_seen.get(tail, 0)
+            if last_pos is None or (now - last_t) <= stale_threshold:
+                continue
+            if tail in self.seen_inside:
+                # Was inside our polygon and now lost from CFT → hand off
+                log.info(
+                    "Aircraft %s lost from CFT (beyond bbox) — initiating handoff from last position",
+                    tail,
+                )
+                self._handoff_exiting_aircraft(last_pos)
+            else:
+                # Never entered our polygon — check if it's in another center
+                neighbor = find_center_for_position(
+                    last_pos.position.latitude, last_pos.position.longitude,
+                    self.all_boundaries, exclude=self.center_id,
+                )
+                if neighbor:
+                    log.info(
+                        "Aircraft %s never entered %s, currently in %s — forwarding handoff",
+                        tail, self.center_id, neighbor,
+                    )
+                    self._handoff_exiting_aircraft(last_pos)
 
         if self.controlled_aircraft:
             log.info(
@@ -244,7 +307,7 @@ class EnRouteCenter:
 
     def check_separation(self):
         """Check for separation violations between controlled aircraft pairs."""
-        positions = list(self.controlled_aircraft.values())
+        positions = [p for p in self.controlled_aircraft.values() if p is not None]
         for i, a in enumerate(positions):
             for b in positions[i + 1:]:
                 lat_diff = abs(a.position.latitude - b.position.latitude)
@@ -324,6 +387,9 @@ class EnRouteCenter:
         self._unregister_tracking(tail)
         self.handed_off.add(tail)
         self.controlled_aircraft.pop(tail, None)
+        self.last_seen.pop(tail, None)
+        self.acquired_at.pop(tail, None)
+        self.seen_inside.discard(tail)
 
     # ── Handoff: accept incoming ───────────────────────────────────────
 
@@ -354,6 +420,11 @@ class EnRouteCenter:
                 self.ho_writer.write(accept)
                 # Begin tracking this aircraft
                 self.controlled_aircraft[sample.tail_number] = None
+                now = time.time()
+                self.last_seen[sample.tail_number] = now
+                self.acquired_at[sample.tail_number] = now
+                self.handed_off.discard(sample.tail_number)
+                self.seen_inside.discard(sample.tail_number)
                 self.alerted_uncoordinated.discard(sample.tail_number)
                 self._publish_tracking(sample.tail_number)
 

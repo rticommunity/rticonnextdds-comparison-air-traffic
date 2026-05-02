@@ -89,6 +89,7 @@ class TraconController:
         self.serving_center = serving_center
         self.tracked_aircraft: dict[str, AircraftPosition] = {}
         self.handed_off: set[str] = set()  # tail numbers already handed off this cycle
+        self.acquired_aircraft: set[str] = set()  # aircraft formally received via handoff
 
         # DDS setup
         self.qos_provider = load_qos_provider()
@@ -97,7 +98,12 @@ class TraconController:
         dp_partitions = [f"OPS/TERMINAL/{tracon_id}", "OPS/FPS/*"]
         if serving_center:
             dp_partitions.append(f"OPS/ENROUTE/{serving_center}")
-        self.participant = create_participant(self.qos_provider, dp_partitions=dp_partitions)
+        self.participant = create_participant(
+            self.qos_provider,
+            dp_partitions=dp_partitions,
+            participant_name=f"TRACON_{tracon_id}",
+            app_name="ATC_TRACON",
+        )
 
         self.publisher = create_publisher(self.participant)
         self.subscriber = create_subscriber(self.participant)
@@ -285,6 +291,9 @@ class TraconController:
         for tail, pos in list(self.tracked_aircraft.items()):
             if tail in self.handed_off:
                 continue
+            # Only manage handoffs for aircraft formally acquired via handoff
+            if tail not in self.acquired_aircraft:
+                continue
 
             alt = pos.position.altitude_feet
 
@@ -357,6 +366,7 @@ class TraconController:
                     completed_at=now_ms(),
                 )
                 self.ho_writer.write(accept)
+                self.acquired_aircraft.add(sample.tail_number)
                 self._publish_tracking(sample.tail_number)
 
     # ── AircraftTracking lifecycle ─────────────────────────────────────

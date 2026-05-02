@@ -112,7 +112,12 @@ class AirplaneSimulator:
             f"OPS/AIRPORT/{origin}",
             f"OPS/AIRPORT/{destination}",
         ]
-        self.participant = create_participant(self.qos_provider, dp_partitions=dp_partitions)
+        self.participant = create_participant(
+            self.qos_provider,
+            dp_partitions=dp_partitions,
+            participant_name=f"Airplane_{callsign}",
+            app_name="ATC_Airplane",
+        )
 
         self.publisher = create_publisher(self.participant)
         self.subscriber = create_subscriber(self.participant)

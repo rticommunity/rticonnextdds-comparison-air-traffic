@@ -51,7 +51,12 @@ class FlightPlanService:
         # DDS setup
         self.qos_provider = load_qos_provider()
         dp_partitions = [f"OPS/FPS/{service_name}"]
-        self.participant = create_participant(self.qos_provider, dp_partitions=dp_partitions)
+        self.participant = create_participant(
+            self.qos_provider,
+            dp_partitions=dp_partitions,
+            participant_name=f"FlightPlanService_{service_name}",
+            app_name="ATC_FlightPlanService",
+        )
 
         self.publisher = create_publisher(self.participant)
 

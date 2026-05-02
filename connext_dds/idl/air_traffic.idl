@@ -288,7 +288,7 @@ module NationalAirTrafficControl {
         @key TailNumber tail_number;
         ControllerId controller_id;
         ShortText facility_id;          // e.g. "ZNY", "N90", "KJFK"
-        FacilityType facility_type;
+        FacilityType facility_type;     // TOWER, TRACON, CENTER, NATIONAL
         Timestamp acquired_at;
     };
 

@@ -935,7 +935,18 @@ function renderAircraft(positions, trails, tracking) {
       aircraftLabels[ac.tail_number] = lbl;
     }
     // Update label text (callsign + FL + controller)
-    var ctrlTag = trk ? ' \u00b7 ' + trk.facility_id : '';
+    var ctrlTag = '';
+    if (trk) {
+      if (trk.facility_type === 'CENTER') {
+        ctrlTag = ' \u00b7 ' + trk.facility_id;
+      } else if (trk.facility_type === 'TRACON') {
+        ctrlTag = ' \u00b7 APP-' + trk.facility_id;
+      } else if (trk.facility_type === 'TOWER') {
+        ctrlTag = ' \u00b7 TWR-' + trk.facility_id;
+      } else {
+        ctrlTag = ' \u00b7 ' + trk.facility_id;
+      }
+    }
     aircraftLabels[ac.tail_number].setIcon(L.divIcon({
       className: "",
       html: '<div class="aircraft-label" style="border-color:' + color + '80">' + ac.callsign + ' FL' + String(Math.round(ac.alt_ft/100)).padStart(3,'0') + ctrlTag + '</div>',
@@ -1143,7 +1154,12 @@ speedSlider.addEventListener("input", function() {
 def init_dds():
     qos_provider = load_qos_provider()
     dp_partitions = ["OPS/*"]
-    participant = create_participant(qos_provider, dp_partitions=dp_partitions)
+    participant = create_participant(
+        qos_provider,
+        dp_partitions=dp_partitions,
+        participant_name="Dashboard",
+        app_name="ATC_Dashboard",
+    )
     subscriber = create_subscriber(participant)
     readers = {}
     for topic_name, (type_cls, profile) in TOPIC_MAP.items():

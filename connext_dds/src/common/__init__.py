@@ -126,12 +126,22 @@ def create_participant(
     qos_provider: dds.QosProvider,
     domain_id: int = DOMAIN_ID,
     dp_partitions: list[str] | None = None,
+    participant_name: str | None = None,
+    app_name: str | None = None,
 ) -> dds.DomainParticipant:
     participant_qos = qos_provider.participant_qos_from_profile(
         f"{QOS_LIB}::AtcParticipantProfile"
     )
     if dp_partitions:
         participant_qos.partition.name = dp_partitions
+    if participant_name:
+        participant_qos.participant_name.name = participant_name
+    if app_name:
+        participant_qos.participant_name.role_name = app_name
+    # Disable shared memory — use only UDPv4
+    participant_qos.transport_builtin.mask = dds.TransportBuiltinMask.UDPv4
+    # Allow longer CFT filter parameter strings (default 256 is too short for geo bboxes)
+    participant_qos.resource_limits.contentfilter_property_max_length = 512
     return dds.DomainParticipant(domain_id, participant_qos)
 
 
