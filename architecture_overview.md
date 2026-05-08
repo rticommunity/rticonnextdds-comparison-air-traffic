@@ -18,21 +18,23 @@ Represents an individual aircraft in the system.
 
 | Attribute | Description |
 |---|---|
-| `aircraft_id` | Unique identifier (e.g., tail number or callsign) |
-| `aircraft_type` | Model/type of aircraft (e.g., B737, A320) |
+| `tail_number` | Unique identifier (e.g., N-number) |
+| `callsign` | Flight callsign (e.g., AAL100) |
 | `position` | Current 3-D position (latitude, longitude, altitude) |
 | `velocity` | Speed and heading (ground speed, vertical speed, bearing) |
-| `status` | Current phase: `en_route`, `approaching`, `landing`, `on_ground`, `taxiing`, `taking_off`, `departed` |
+| `status` | Current phase: `preflight`, `taxi_out`, `takeoff`, `climb`, `cruise`, `descent`, `approach`, `landing`, `taxi_in`, `parked`, `holding` |
 | `origin_airport` | Departure airport code |
 | `destination_airport` | Arrival airport code |
-| `fuel_level` | Remaining fuel (percentage or time-to-empty) |
+| `fuel_level` | Remaining fuel (percentage) |
 | `assigned_runway` | Runway assigned for landing or takeoff |
+| `nav_status` | Navigation status: `normal`, `weather_deviation`, `holding`, `emergency` |
 
 **Behaviors:**
 - Periodically publish its position and status.
 - Receive and acknowledge instructions from controllers.
-- Transition through flight phases based on controller clearances.
-- Declare emergencies (e.g., low fuel, mechanical issue).
+- Transition through flight phases autonomously and in response to controller clearances.
+- File flight plans via request/reply before departure.
+- Request gate assignment via request/reply upon arrival.
 
 ### 2.2 Airport
 
@@ -46,10 +48,11 @@ Represents a physical airport with associated infrastructure.
 | `runways` | List of runways with orientation, length, and current status (open/closed/occupied) |
 | `gates` | Available gates and their occupancy status |
 | `weather` | Current weather conditions (wind, visibility, ceiling) |
+| `serving_tracon` | The TRACON facility serving this airport |
 
 **Behaviors:**
 - Publish weather and runway status updates.
-- Report gate availability changes.
+- Handle gate assignment requests (request/reply).
 
 ### 2.3 Control Tower
 
@@ -57,18 +60,37 @@ The air-traffic control facility at each airport, responsible for terminal-area 
 
 | Attribute | Description |
 |---|---|
-| `tower_id` | Unique identifier |
+| `controller_id` | Tower controller identifier (e.g., `TWR-KJFK`) |
 | `airport_code` | The airport this tower manages |
-| `active_controllers` | List of controllers currently on duty |
-| `managed_airspace` | Defined region of responsibility (radius, altitude range) |
+| `serving_tracon` | The TRACON this tower hands off to |
+| `managed_airspace` | Below ~3,000 ft AGL at the airport |
 
 **Behaviors:**
-- Monitor all aircraft within its managed airspace.
-- Issue approach, landing, takeoff, and taxi clearances.
+- Monitor local traffic (departures originating here, arrivals below tower ceiling).
+- Issue approach and landing clearances.
+- Publish runway status updates.
+- Detect separation violations and publish alerts.
 - Manage runway sequencing and separation.
-- Hand off aircraft to/from en-route controllers.
+- Hand off departing aircraft to TRACON and accept arriving aircraft from TRACON.
 
-### 2.4 Air-Traffic Controller
+### 2.4 TRACON (Terminal Radar Approach Control)
+
+Manages terminal-area aircraft between local tower and en-route center.
+
+| Attribute | Description |
+|---|---|
+| `tracon_id` | Unique terminal facility identifier |
+| `served_airports` | Airports covered by this TRACON |
+| `altitude_band` | Typical terminal control band (approx. 500 ft to 18,000 ft) |
+| `serving_center` | En-route center paired with this TRACON |
+
+**Behaviors:**
+- Sequence arrivals and departures in terminal airspace.
+- Issue speed/clearance instructions for approach and climb transitions.
+- Accept handoffs from towers and centers.
+- Hand off departures to center and arrivals to tower.
+
+### 2.5 Air-Traffic Controller
 
 An individual controller managing a set of aircraft.
 
@@ -85,42 +107,89 @@ An individual controller managing a set of aircraft.
 - Transfer control of aircraft to another controller (handoff).
 - Declare alerts when separation minimums are violated.
 
-### 2.5 Flight Plan
+### 2.6 Flight Plan
 
 Describes the intended route and schedule of a flight.
 
 | Attribute | Description |
 |---|---|
 | `flight_plan_id` | Unique identifier |
-| `aircraft_id` | Associated aircraft |
+| `tail_number` | Associated aircraft tail number |
+| `callsign` | Flight callsign |
 | `departure_airport` | Origin airport code |
 | `arrival_airport` | Destination airport code |
 | `route` | Ordered list of waypoints |
 | `planned_departure_time` | Scheduled departure |
-| `planned_arrival_time` | Estimated arrival |
-| `cruising_altitude` | Requested cruise altitude |
-| `status` | `filed`, `active`, `completed`, `cancelled` |
+| `status` | `filed`, `active`, `amended`, `delayed`, `cancelled`, `completed` |
 
 **Behaviors:**
 - Filed before departure and activated on takeoff.
 - Updated in-flight if route amendments are issued.
 - Closed upon landing or cancellation.
 
-### 2.6 En-Route Control Center
+### 2.7 En-Route Control Center
 
 Manages aircraft in transit between airports (high-altitude, non-terminal airspace).
 
 | Attribute | Description |
 |---|---|
 | `center_id` | Unique identifier |
-| `region` | Geographic region covered |
-| `sectors` | Subdivisions of the airspace |
-| `active_controllers` | Controllers on duty |
+| `region` | Geographic region covered (boundary polygon) |
+| `altitude_band` | Min/max altitude of jurisdiction (typically FL180–FL600) |
+| `controller_id` | Controller on duty |
 
 **Behaviors:**
-- Monitor en-route traffic within its region.
-- Issue routing and altitude instructions.
-- Hand off aircraft to adjacent centers or to approach controllers.
+- Monitor en-route traffic within its boundary polygon using position filtering.
+- Detect and alert on separation violations between controlled aircraft.
+- Issue routing, altitude, and weather-deviation instructions.
+- Reroute aircraft around convective weather cells.
+- Hand off aircraft to adjacent centers or to TRACON for arrivals.
+
+### 2.8 Flight Plan Service
+
+Central service that validates and accepts/rejects filed flight plans.
+
+| Attribute | Description |
+|---|---|
+| `service_id` | Unique service instance identifier |
+| `validation_rules` | Business rules for plan acceptance/rejection |
+| `published_plans` | Accepted plans distributed to operational components |
+
+**Behaviors:**
+- Receive flight plan filing requests.
+- Validate and respond with acceptance/rejection.
+- Publish accepted plans as state data.
+
+### 2.9 Weather Service (En-Route Convective Hazards)
+
+Publishes moving storm-cell style hazards used by en-route controllers.
+
+| Attribute | Description |
+|---|---|
+| `cell_id` | Unique weather cell identifier |
+| `center` | Cell center position (lat/lon) |
+| `radius_nm` | Affected radius in nautical miles |
+| `altitude_band` | Base/top altitude of hazard |
+| `severity` | Hazard severity level |
+
+**Behaviors:**
+- Generate and publish convective-cell updates.
+- Move cells over time and retire dissipated cells.
+- Support rerouting/deviation decisions by controllers.
+
+### 2.10 Operational Dashboard
+
+Read-only observer for end-to-end system state.
+
+| Attribute | Description |
+|---|---|
+| `observed_topics` | Position, plans, weather, handoffs, alerts, status |
+| `airspace_views` | Airport, TRACON, and center situational views |
+
+**Behaviors:**
+- Subscribe to all operational streams.
+- Present current aircraft, facility, and weather-hazard state.
+- Visualize handoffs and safety alerts in near real time.
 
 ---
 
@@ -130,7 +199,7 @@ Manages aircraft in transit between airports (high-altitude, non-terminal airspa
 Published periodically by each airplane.
 
 ```
-aircraft_id, timestamp, latitude, longitude, altitude,
+tail_number, timestamp, latitude, longitude, altitude,
 ground_speed, vertical_speed, heading
 ```
 
@@ -138,8 +207,8 @@ ground_speed, vertical_speed, heading
 Issued by a controller to a specific aircraft.
 
 ```
-instruction_id, controller_id, aircraft_id, timestamp,
-instruction_type (heading | altitude | speed | clearance | hold | go_around),
+instruction_id, controller_id, tail_number, timestamp,
+instruction_type (heading | altitude | speed | clearance | hold | go_around | taxi | pushback),
 parameters (target_value, runway, waypoint, etc.)
 ```
 
@@ -147,15 +216,16 @@ parameters (target_value, runway, waypoint, etc.)
 Sent by the aircraft in response to an instruction.
 
 ```
-ack_id, instruction_id, aircraft_id, timestamp,
-status (wilco | unable | request_repeat)
+ack_id, instruction_id, tail_number, timestamp,
+status (received | wilco | unable | readback_correct | readback_incorrect)
 ```
 
-### 3.4 Flight Plan Update
-Amendments to an active flight plan.
+### 3.4 Flight Plan State
+Published by the Flight Plan Service when a plan is filed or its status changes.
 
 ```
-flight_plan_id, amendment_type, updated_fields, issued_by, timestamp
+flight_plan_id, tail_number, callsign, departure_airport, arrival_airport,
+waypoints[], scheduled_departure_time, status, last_updated
 ```
 
 ### 3.5 Runway Status
@@ -172,7 +242,7 @@ Periodic publication of airport weather conditions.
 ```
 airport_code, timestamp, wind_direction, wind_speed,
 visibility, ceiling, temperature, altimeter_setting,
-conditions (VFR | MVFR | IFR | LIFR)
+conditions (vmc | imc | rain | snow | fog | thunderstorm | wind_shear | ice)
 ```
 
 ### 3.7 Handoff Request / Accept
@@ -180,15 +250,40 @@ Coordination between controllers when an aircraft transitions between sectors.
 
 ```
 handoff_id, from_controller_id, to_controller_id,
-aircraft_id, timestamp, status (requested | accepted | rejected)
+tail_number, timestamp, status (initiated | accepted | rejected | completed | cancelled)
 ```
 
 ### 3.8 Alert / Conflict Notification
 Generated when safety thresholds are breached.
 
 ```
-alert_id, alert_type (separation_violation | runway_incursion | emergency),
+alert_id, alert_type (emergency | traffic_conflict | weather_hazard | runway_incursion |
+communication_loss | system_failure | unauthorized_entry | weather_deviation),
 involved_aircraft[], timestamp, severity, description
+```
+
+### 3.9 Convective Weather Cell
+Published by the weather service for en-route hazard awareness.
+
+```
+cell_id, timestamp, center_latitude, center_longitude,
+radius_nm, base_altitude_ft, top_altitude_ft,
+severity, movement_heading_deg, movement_speed_knots
+```
+
+### 3.10 Aircraft Tracking State
+Indicates the current controller/facility of record for an aircraft.
+
+```
+tail_number, controller_id, facility_id, facility_type, acquired_at
+```
+
+### 3.11 Facility Status
+Heartbeat/workload status published by operational control facilities.
+
+```
+facility_id, facility_type, controller_id,
+tracked_aircraft_count, last_updated
 ```
 
 ---
@@ -196,9 +291,11 @@ involved_aircraft[], timestamp, severity, description
 ## 4. Interaction Patterns
 
 ### 4.1 Publish / Subscribe (One-to-Many)
-- **Position Reports:** Every airplane publishes; control towers and en-route centers subscribe to aircraft within their airspace.
+- **Position Reports:** Every airplane publishes; towers, TRACONs, and en-route centers subscribe to aircraft relevant to their airspace.
 - **Weather Reports:** Airports publish; all aircraft and controllers subscribe.
 - **Runway Status:** Airports publish; controllers and approaching aircraft subscribe.
+- **Convective Weather Cells:** Weather service publishes; en-route centers and dashboards subscribe.
+- **Aircraft Tracking / Facility Status:** Operational facilities publish ownership and heartbeat state for monitoring.
 - **Alerts:** Generated and broadcast to all relevant parties.
 
 ### 4.2 Command / Response (One-to-One)
@@ -214,30 +311,31 @@ involved_aircraft[], timestamp, severity, description
 ## 5. Key Workflows
 
 ### 5.1 Departure Sequence
-1. Flight plan is filed and approved.
-2. Aircraft requests pushback and taxi clearance.
-3. Control tower assigns a runway and taxi route.
-4. Aircraft taxis to the assigned runway.
-5. Tower issues takeoff clearance.
-6. Aircraft takes off and transitions to en-route control.
-7. Handoff from tower controller to en-route controller.
+1. Flight plan is filed and approved (request/reply with Flight Plan Service).
+2. Aircraft auto-transitions through preflight, taxi-out, and takeoff phases.
+3. Tower monitors departure and tracks aircraft as controller of record.
+4. Aircraft takes off and transitions to terminal control (TRACON).
+5. Handoff from tower controller to TRACON controller.
+6. TRACON hands aircraft to en-route center when climbing to en-route airspace.
 
 ### 5.2 En-Route Flight
 1. En-route center monitors aircraft position reports.
 2. Controller issues heading/altitude amendments as needed.
-3. When approaching sector boundary, handoff to adjacent center.
-4. When approaching destination, handoff to approach/tower controller.
+3. Center detects convective weather cells and issues heading deviations to affected aircraft.
+4. When weather clears, center issues clearance to resume own navigation.
+5. When approaching sector boundary, handoff to adjacent center.
+6. When approaching destination and descending, handoff to destination TRACON.
 
 ### 5.3 Arrival Sequence
-1. Approach controller sequences inbound aircraft.
-2. Controller issues approach clearance and assigns runway.
-3. Aircraft follows approach procedure, publishing position.
-4. Tower issues landing clearance.
+1. TRACON controller sequences inbound aircraft.
+2. Controller issues speed instructions for approach transitions.
+3. Handoff from TRACON to tower in low-altitude terminal phase.
+4. Tower issues approach/landing clearance.
 5. Aircraft lands and reports on ground.
-6. Tower issues taxi instructions to gate.
+6. Aircraft requests gate assignment (request/reply with Airport).
 7. Flight plan is closed.
 
-### 5.4 Emergency Handling
+### 5.4 Emergency Handling (not yet implemented)
 1. Aircraft declares emergency (fuel, mechanical, medical).
 2. Alert is broadcast to all relevant controllers.
 3. Priority handling: aircraft gets immediate clearance.
@@ -249,10 +347,11 @@ involved_aircraft[], timestamp, severity, description
 
 | Element | Description |
 |---|---|
-| **Time model** | Simulated clock with configurable speed (real-time, accelerated) |
+| **Time model** | Speed multiplier broadcast via DDS discovery; all apps scale their sim-time ticks accordingly |
 | **Aircraft generator** | Creates aircraft with randomized or scripted flight plans |
 | **Position simulator** | Advances aircraft positions based on speed, heading, and flight phase |
-| **Weather generator** | Produces changing weather conditions per airport on a schedule |
+| **Airport weather generator** | Produces changing METAR-style weather conditions per airport on a schedule |
+| **Convective weather service** | Spawns, moves, and retires en-route storm cells consumed by centers for rerouting |
 | **Scenario scripts** | Predefined scenarios (normal operations, high traffic, emergency, multi-airport coordination) |
 
 ---
@@ -277,28 +376,40 @@ These are abstract requirements that each middleware technology must satisfy in 
 ## 8. Deployment Topology
 
 ```
-┌──────────────────────────────────────────────────────┐
-│                  National Airspace                    │
-│                                                      │
-│   ┌─────────────┐         ┌─────────────┐           │
-│   │ En-Route     │◄───────►│ En-Route     │          │
-│   │ Center A     │         │ Center B     │          │
-│   └──────┬──────┘         └──────┬──────┘           │
-│          │    handoffs           │                    │
-│     ┌────▼────┐            ┌────▼────┐              │
-│     │ Tower 1  │            │ Tower 2  │             │
-│     │(Airport 1)│           │(Airport 2)│            │
-│     └────┬────┘            └────┬────┘              │
-│          │                      │                    │
-│    ✈ ✈ ✈ ✈                ✈ ✈ ✈ ✈                 │
-│   Aircraft at               Aircraft at              │
-│   Airport 1                 Airport 2                │
-│                                                      │
-│          ✈  ✈  ✈  ✈  ✈  (en-route aircraft)        │
-└──────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────────┐
+│                        National Airspace                           │
+│                                                                   │
+│  ┌──────────────┐    handoffs    ┌──────────────┐                 │
+│  │ En-Route      │◄─────────────►│ En-Route      │                │
+│  │ Center A      │               │ Center B      │                │
+│  └──────┬───────┘               └───────┬──────┘                 │
+│         │                               │                         │
+│    ┌────▼─────┐                   ┌─────▼────┐                    │
+│    │ TRACON 1  │                   │ TRACON 2  │                   │
+│    └────┬─────┘                   └─────┬────┘                    │
+│         │                               │                         │
+│    ┌────▼─────┐                   ┌─────▼────┐                    │
+│    │ Tower 1   │                   │ Tower 2   │                   │
+│    │(Airport 1) │                  │(Airport 2) │                  │
+│    └────┬─────┘                   └─────┬────┘                    │
+│         │                               │                         │
+│    ✈ ✈ ✈ ✈                         ✈ ✈ ✈ ✈                      │
+│   Aircraft at                      Aircraft at                    │
+│   Airport 1                        Airport 2                      │
+│                                                                   │
+│         ✈  ✈  ✈  ✈  ✈  (en-route aircraft)                      │
+│                                                                   │
+│  ┌────────────────────┐   ┌───────────────────┐                   │
+│  │ Flight Plan Service │   │ Weather Service    │                  │
+│  └────────────────────┘   └───────────────────┘                   │
+│                                                                   │
+│  ┌────────────────────┐                                           │
+│  │ Dashboard (observer)│                                          │
+│  └────────────────────┘                                           │
+└───────────────────────────────────────────────────────────────────┘
 ```
 
-Each airport has a local control tower instance. En-route centers manage aircraft between airports. All components communicate through the selected middleware.
+Each airport has a local control tower instance and a serving TRACON. En-route centers manage aircraft between TRACON regions. Flight plan and weather services provide shared operational data. A dashboard can observe the full system state. All components communicate through the selected middleware.
 
 ---
 

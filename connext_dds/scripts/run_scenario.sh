@@ -44,6 +44,7 @@ SRC_DIR="$PROJECT_DIR/src"
 # ── Connext license ────────────────────────────────────────────────────────
 export NDDSHOME="${NDDSHOME:-/Applications/rti_connext_dds-7.7.0}"
 export RTI_LICENSE_FILE="${RTI_LICENSE_FILE:-$NDDSHOME/rti_license.dat}"
+export DYLD_LIBRARY_PATH="$NDDSHOME/lib/arm64Darwin23clang16.0"
 
 # ── Python from project venv ───────────────────────────────────────────────
 PYTHON="${PYTHON:-$REPO_DIR/venv/bin/python3}"

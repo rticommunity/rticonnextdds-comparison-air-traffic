@@ -57,6 +57,7 @@ This system uses **only DomainParticipant partitions** (no Publisher/Subscriber 
 | `OPS/AIRPORT/*` | Wildcard — matches all airport scopes |
 | `OPS/FPS/<name>` | Flight Plan Service instance scope (e.g., `OPS/FPS/main`) |
 | `OPS/FPS/*` | Wildcard — matches any FPS instance |
+| `OPS/WEATHER/*` | Wildcard — matches weather service scope |
 
 #### DomainParticipant Partition Assignment — "Reach Up" Design
 
@@ -71,22 +72,23 @@ serving center.
 | Tower | `OPS/AIRPORT/<code>`, `OPS/FPS/*`, `OPS/TERMINAL/<serving_tracon>` | Reaches up into its TRACON scope; discovers FPS |
 | Airport | `OPS/AIRPORT/<code>`, `OPS/TERMINAL/<serving_tracon>` | Same as tower minus FPS — no flight-plan interaction |
 | TRACON | `OPS/TERMINAL/<id>`, `OPS/FPS/*`, `OPS/ENROUTE/<serving_center>` | Reaches up into its center scope; discovers FPS |
-| Center | `OPS/ENROUTE/<center_id>`, `OPS/FPS/*` | Top of the operational hierarchy; discovers FPS |
+| Center | `OPS/ENROUTE/<center_id>`, `OPS/ENROUTE/*`, `OPS/FPS/*` | Cross-center handoffs via `OPS/ENROUTE/*`; discovers FPS |
 | Airplane | `OPS/FPS/*`, `OPS/TERMINAL/*`, `OPS/ENROUTE/*`, `OPS/AIRPORT/<origin>`, `OPS/AIRPORT/<destination>` | Discovers origin/destination towers, all TRACONs and centers along route, plus FPS for filing |
 | Flight Plan Service | `OPS/FPS/<name>` | Concrete instance partition (e.g., `OPS/FPS/main`); consumers match via `OPS/FPS/*` |
 | Dashboard | `OPS/*` | Global observer — single wildcard discovers all `OPS/` endpoints |
+| Weather Service | `OPS/WEATHER/*`, `OPS/ENROUTE/*` | Publishes convective cells; center wildcard ensures centers discover its writer |
 
 #### Discovery Isolation Examples
 
 With DP partitions, the following pairs **never exchange endpoint discovery** (no shared DP partition):
 - Tower KJFK ↔ Tower KLAX (different airports, different TRACONs)
 - Tower KJFK ↔ Center ZLA (different scopes, no bridging partition)
-- Center ZNY ↔ Center ZLA (different regions)
 - Airplane (KJFK→KLAX) ↔ Tower KORD (no shared airport partition)
 
 Adjacent layers discover each other via the "reach up" overlap:
 - Tower KJFK ↔ TRACON N90 (both join `OPS/TERMINAL/N90`)
 - TRACON N90 ↔ Center ZNY (both join `OPS/ENROUTE/ZNY`)
+- Center ZNY ↔ Center ZLA (each center's `OPS/ENROUTE/*` matches the other's concrete partition)
 - Airplane ↔ Tower KJFK (match on `OPS/AIRPORT/KJFK`)
 - Airplane ↔ TRACON N90 (airplane `OPS/TERMINAL/*` matches `OPS/TERMINAL/N90`)
 
@@ -106,7 +108,10 @@ New York (KJFK) to Los Angeles (KLAX). **Solid arrows** are "reach up" links
 
 - **No cross-discovery between peers:** Tower KJFK and Tower KLAX share no
   concrete partition — `OPS/FPS/*` vs `OPS/FPS/*` does **not** match (two
-  wildcards never match). Likewise Center ZNY ↔ Center ZLA.
+  wildcards never match).
+- **Cross-center discovery:** Centers add `OPS/ENROUTE/*` alongside their
+  concrete `OPS/ENROUTE/<id>`. Each center's wildcard matches the other's
+  concrete name, enabling cross-center handoff communication.
 - **Airport app has no FPS link:** Airport KJFK only publishes weather and
   runways, and serves gate requests — it never touches flight plans, so it
   omits `OPS/FPS/*`.
@@ -135,7 +140,7 @@ The complete data model is defined in [`idl/air_traffic.idl`](idl/air_traffic.id
 
 **Domain-Specific Typedefs** — `TailNumber` (16 chars), `ControllerId` (32 chars), `InstructionId` (64 chars), plus `Callsign`, `AirportCode`, `RunwayId`, `WaypointName`, `ShortText`, `Timestamp`, and generic `IdString`. These improve type safety and self-documentation over raw bounded strings.
 
-**Pub/Sub Topic Types (8):**
+**Pub/Sub Topic Types (11):**
 
 | Type | Key Field(s) | Purpose |
 |---|---|---|
@@ -147,6 +152,9 @@ The complete data model is defined in [`idl/air_traffic.idl`](idl/air_traffic.id
 | `WeatherReport` | `airport_code` | METAR-style weather observations |
 | `Handoff` | `handoff_id` | Controller-to-controller transfer with `FacilityType` (TOWER/TRACON/CENTER/NATIONAL) |
 | `Alert` | `alert_id` | Safety alerts: traffic conflict, weather hazard, runway incursion, etc. |
+| `AircraftTracking` | `tail_number` | Which controller/facility currently tracks each aircraft |
+| `FacilityStatus` | `facility_id` | Facility liveness: controller ID, tracked aircraft count, heartbeat |
+| `ConvectiveCell` | `cell_id` | Convective weather cells: position, radius, severity, movement |
 
 **Request/Reply Types (2 services):**
 
@@ -155,9 +163,9 @@ The complete data model is defined in [`idl/air_traffic.idl`](idl/air_traffic.id
 | Flight Plan Filing | `FlightPlanRequest` → `FlightPlanResponse` | File a flight plan and receive acceptance/rejection |
 | Gate Assignment | `GateRequest` → `GateAssignmentReply` | Request a gate and receive PENDING → ASSIGNED workflow |
 
-**Enums (11):** `FlightPhase`, `InstructionType`, `AcknowledgmentStatus`, `FlightPlanStatus`, `RunwayOperationalStatus`, `WeatherCondition`, `HandoffStatus`, `AlertSeverity`, `AlertType`, `FacilityType`, `GateAssignmentStatusKind`
+**Enums (13):** `FlightPhase`, `InstructionType`, `AcknowledgmentStatus`, `FlightPlanStatus`, `RunwayOperationalStatus`, `WeatherCondition`, `HandoffStatus`, `AlertSeverity`, `AlertType`, `ConvectiveSeverity`, `FacilityType`, `GateAssignmentStatusKind`, `NavStatus`
 
-**Nested Helper Structs (3):** `GeoPosition` (lat/lon/alt), `Wind` (direction/speed/gust), `Waypoint` (name/position/time)
+**Nested Helper Structs (4):** `GeoPosition` (lat/lon/alt), `Wind` (direction/speed/gust), `Waypoint` (name/position/time), `GateAssignment` (gate/terminal/status)
 
 ---
 
@@ -173,6 +181,9 @@ The complete data model is defined in [`idl/air_traffic.idl`](idl/air_traffic.id
 | `WeatherReport` | `WeatherReport` | `airport_code` | Pub/Sub (state) | `StateDataProfile` |
 | `Handoff` | `Handoff` | `handoff_id` | Pub/Sub (directed) | `HandoffProfile` |
 | `Alert` | `Alert` | `alert_id` | Pub/Sub (broadcast) | `AlertBroadcastProfile` |
+| `AircraftTracking` | `AircraftTracking` | `tail_number` | Pub/Sub (state) | `StateDataProfile` |
+| `FacilityStatus` | `FacilityStatus` | `facility_id` | Pub/Sub (state) | `StateDataProfile` |
+| `ConvectiveCell` | `ConvectiveCell` | `cell_id` | Pub/Sub (state) | `StateDataProfile` |
 
 ### Request/Reply Services
 
@@ -194,7 +205,7 @@ All QoS profiles are defined in [`qos/USER_QOS_PROFILES.xml`](qos/USER_QOS_PROFI
 | `AtcParticipantProfile` | `BuiltinQosLib::Generic.Common` | (all participants) | Discovery optimizations, fast endpoint discovery, reliability protocol tuning |
 | `PositionReportingProfile` | `BuiltinQosLib::Pattern.PeriodicData` | AircraftPosition | Best-effort, keep-last-1, volatile, deadline 200ms, lifespan 1s (writer only), exclusive ownership |
 | `ReliableCommandProfile` | `BuiltinQosLib::Generic.StrictReliable` | ControllerInstruction, PilotAcknowledgment | Reliable, keep-all, transient-local, deadline 5s, liveliness 10s, priority 5 |
-| `StateDataProfile` | `BuiltinQosLib::Pattern.Status` | RunwayStatus, WeatherReport, FlightPlan | Reliable, keep-last-1, transient-local, exclusive ownership, 30s deadline (weather only) |
+| `StateDataProfile` | `BuiltinQosLib::Pattern.Status` | RunwayStatus, WeatherReport, FlightPlan, AircraftTracking, FacilityStatus, ConvectiveCell | Reliable, keep-last-1, transient-local, exclusive ownership, 30s deadline (weather only), 5s manual-by-topic liveliness (FacilityStatus), 15s deadline (ConvectiveCell) |
 | `AlertBroadcastProfile` | `BuiltinQosLib::Pattern.Event` | Alert | Reliable, keep-all, transient-local, lifespan 60s (writer only), priority 10 (highest) |
 | `HandoffProfile` | `BuiltinQosLib::Generic.KeepLastReliable.TransientLocal` | Handoff | Reliable, keep-last-5, transient-local, manual-by-topic liveliness 15s |
 | `FlightPlanRequestReplyProfile` | `BuiltinQosLib::Pattern.RPC` | FlightPlanFilingService | Reliable, keep-all, RPC-tuned protocol |
@@ -225,7 +236,7 @@ Writer-side filtering is applied unless one of these conditions is present:
 |---|---|---|---|
 | `MyInstructions_<tail>` | `ControllerInstruction` | `tail_number = '<tail_number>'` | Airplane (receives only its own instructions) |
 | `LocalTraffic_<code>` | `AircraftPosition` | `origin_airport = '<code>' OR destination_airport = '<code>'` | Control Tower (sees only local traffic) |
-| `SectorTraffic_<center>` | `AircraftPosition` | `position.altitude_feet >= %0 AND position.altitude_feet < %1` | En-Route Center (altitude band filtering) |
+| `SectorTraffic_<center>` | `AircraftPosition` | `position.altitude_feet >= %0 AND position.altitude_feet < %1 AND position.latitude >= %2 AND position.latitude <= %3 AND position.longitude >= %4 AND position.longitude <= %5` | En-Route Center (altitude band + bounding box: 6 params) |
 | `TerminalTraffic_<tracon>` | `AircraftPosition` | `position.altitude_feet >= %0 AND position.altitude_feet < %1` | TRACON (terminal area altitude band: 500–18,000 ft) |
 | `MyHandoffs_<controller>` | `Handoff` | `to_controller_id = '<id>' OR from_controller_id = '<id>'` | Controller (receives relevant handoffs) |
 | `DestWeather_<code>` | `WeatherReport` | `airport_code = '<code>'` | Airplane (weather at destination) |
@@ -292,6 +303,8 @@ One DomainParticipant per airport.
 | **Publish** | `RunwayStatus` | `StateDataProfile` | Runway state changes |
 | **Publish/Subscribe (CFT)** | `Handoff` | `HandoffProfile` | Filter: `to/from_controller_id`; hands departures to TRACON |
 | **Publish** | `Alert` | `AlertBroadcastProfile` | Terminal-area conflicts |
+| **Publish** | `AircraftTracking` | `StateDataProfile` | Current controller-of-record per aircraft |
+| **Publish** | `FacilityStatus` | `StateDataProfile` | Facility heartbeat and tracked aircraft count |
 | **Subscribe (CFT)** | `WeatherReport` | `StateDataProfile` | Filter: own airport |
 | **Subscribe** | `FlightPlan` | `StateDataProfile` | Active flight plans |
 
@@ -308,6 +321,8 @@ One DomainParticipant per TRACON facility (may serve one or more airports).
 | **Subscribe** | `PilotAcknowledgment` | `ReliableCommandProfile` | Pilot responses |
 | **Publish/Subscribe (CFT)** | `Handoff` | `HandoffProfile` | Filter: `to/from_controller_id`; hands to Tower (↓3,000 ft) and Center (↑17,000 ft) |
 | **Publish** | `Alert` | `AlertBroadcastProfile` | Terminal separation violations |
+| **Publish** | `AircraftTracking` | `StateDataProfile` | Current controller-of-record per aircraft |
+| **Publish** | `FacilityStatus` | `StateDataProfile` | Facility heartbeat and tracked aircraft count |
 | **Subscribe** | `WeatherReport` | `StateDataProfile` | Weather at served airports |
 | **Subscribe** | `FlightPlan` | `StateDataProfile` | Active flight plans |
 
@@ -315,16 +330,19 @@ One DomainParticipant per TRACON facility (may serve one or more airports).
 
 One DomainParticipant per center.
 
-**DP Partitions:** `OPS/ENROUTE/<center_id>`, `OPS/FPS/*`
+**DP Partitions:** `OPS/ENROUTE/<center_id>`, `OPS/ENROUTE/*`, `OPS/FPS/*`
 
 | Direction | Topic / Service | QoS Profile | Notes |
 |---|---|---|---|
-| **Subscribe (CFT)** | `AircraftPosition` | `PositionReportingProfile` | Filter: altitude band (18,000–60,000 ft) |
+| **Subscribe (CFT)** | `AircraftPosition` | `PositionReportingProfile` | Filter: altitude band (18,000–60,000 ft) + lat/lon bounding box |
 | **Publish** | `ControllerInstruction` | `ReliableCommandProfile` | Routing/altitude amendments |
 | **Subscribe** | `PilotAcknowledgment` | `ReliableCommandProfile` | Pilot responses |
 | **Publish/Subscribe (CFT)** | `Handoff` | `HandoffProfile` | Filter: `to/from_controller_id`; hands descending aircraft to TRACON |
 | **Publish** | `Alert` | `AlertBroadcastProfile` | Separation violations |
+| **Publish** | `AircraftTracking` | `StateDataProfile` | Current controller-of-record per aircraft |
+| **Publish** | `FacilityStatus` | `StateDataProfile` | Facility heartbeat and tracked aircraft count |
 | **Subscribe** | `FlightPlan` | `StateDataProfile` | Active flight plans |
+| **Subscribe** | `ConvectiveCell` | `StateDataProfile` | En-route weather hazards from Weather Service |
 
 ### 6.5 Airport Participant
 
@@ -349,15 +367,26 @@ Central service for flight plan validation.
 | **Replier** | `FlightPlanFilingService` | `FlightPlanRequestReplyProfile` | Validate and accept/reject |
 | **Publish** | `FlightPlan` | `StateDataProfile` | Publish accepted plans |
 
-### 6.7 Dashboard Participant
+### 6.7 Weather Service Participant
 
-Read-only monitoring and visualization.
+Publishes convective weather cells that affect en-route airspace.
+
+**DP Partitions:** `OPS/WEATHER/*`, `OPS/ENROUTE/*`
+
+| Direction | Topic / Service | QoS Profile | Notes |
+|---|---|---|---|
+| **Publish** | `ConvectiveCell` | `StateDataProfile` | Convective cells with severity, position, radius, and movement vector |
+
+### 6.8 Dashboard Participant
+
+Read-only monitoring and visualization, with manual weather injection capability.
 
 **DP Partitions:** `OPS/*`
 
 | Direction | Topic | QoS Profile | Notes |
 |---|---|---|---|
-| **Subscribe** | All topics | Matching profiles | Read-only observation |
+| **Subscribe** | All 11 pub/sub topics | Matching profiles | Full system observability |
+| **Publish** | `ConvectiveCell` | `StateDataProfile` | Manual weather cell injection for testing |
 
 ---
 
@@ -500,16 +529,22 @@ requester = Requester(
 ```
 ┌───────────────────────── Domain 0: ATC Operations ────────────────────────┐
 │                                                                           │
-│  Partition: OPS/NATIONAL                                                  │
+│  Partition: OPS/FPS/main                  Partition: OPS/WEATHER/*        │
 │  ┌──────────────────────┐     ┌──────────────────┐                        │
-│  │ flightplan_service   │     │  dashboard_app   │                        │
-│  │ (Replier)            │     │  (OPS/* sub)     │                        │
+│  │ flightplan_service   │     │ weather_service  │                        │
+│  │ (Replier)            │     │ (ConvectiveCell) │                        │
 │  └──────────────────────┘     └──────────────────┘                        │
+│                                                                           │
+│  Partition: OPS/*                                                         │
+│  ┌──────────────────┐                                                     │
+│  │  dashboard_app   │                                                     │
+│  │  (global sub)    │                                                     │
+│  └──────────────────┘                                                     │
 │                                                                           │
 │  Partition: OPS/ENROUTE/ZNY             Partition: OPS/ENROUTE/ZLA        │
 │  ┌──────────────────┐                  ┌──────────────────┐               │
 │  │   center_app     │◄── Handoff ─────►│   center_app     │               │
-│  │  (ZNY) FL180+    │                  │  (ZLA) FL180+    │               │
+│  │  (ZNY) FL180+    │  (OPS/ENROUTE/*) │  (ZLA) FL180+    │               │
 │  └──────────────────┘                  └──────────────────┘               │
 │        ▲ Handoff                               ▲ Handoff                  │
 │        │                                       │                          │
@@ -528,7 +563,8 @@ requester = Requester(
 │        ▲ CFT                                  ▲ CFT                       │
 │        │                                      │                           │
 │   ✈ airplane_app (N instances)                                            │
-│     Partitions: OPS/AIRPORT/<origin>, OPS/NATIONAL                        │
+│     Partitions: OPS/FPS/*, OPS/TERMINAL/*, OPS/ENROUTE/*,                 │
+│                 OPS/AIRPORT/<origin>, OPS/AIRPORT/<destination>            │
 │     Publishes: AircraftPosition (periodic 5Hz)                            │
 │     Subscribes: ControllerInstruction (CFT by tail_number)                │
 │     Request/Reply: FlightPlanFilingService, GateAssignmentService         │
@@ -552,6 +588,7 @@ requester = Requester(
 | `center_app` | En-Route Center Participant | K (per region) | Python |
 | `airport_app` | Airport Participant | M (per airport) | Python |
 | `flightplan_service` | Flight Plan Service | 1 | Python |
+| `weather_service` | Weather Service | 1 | Python |
 | `dashboard_app` | Dashboard (read-only) | 1 | Python |
 
 ---
@@ -579,6 +616,8 @@ connext_dds/
 │   │   └── airport.py               # Weather, runways, gate replier
 │   ├── flightplan_service/
 │   │   └── flightplan_service.py    # Flight plan filing replier
+│   ├── weather_service/
+│   │   └── weather_service.py       # Convective weather cell publisher
 │   └── dashboard_app/
 │       └── dashboard.py             # Flask + SSE + Leaflet.js map
 ├── scripts/
@@ -586,8 +625,7 @@ connext_dds/
 │   ├── stop_scenario.sh             # Kill all running ATC processes
 │   └── generate_types.sh            # Run rtiddsgen on IDL → src/air_traffic.py
 ├── config/
-│   ├── scenario_default.json        # Airports, TRACONs, centers, aircraft
-│   └── .sim_speed                   # Shared simulation speed file (dashboard ↔ airplanes)
+│   └── scenario_default.json        # Airports, TRACONs, centers, aircraft, initial_speed
 └── README.md
 ```
 
@@ -624,7 +662,7 @@ connext_dds/
 | Priority | Transport Priority: alerts (10) > commands (5) > positions (0) |
 | Fault detection | Liveliness QoS + Deadline QoS |
 | Redundancy | Exclusive Ownership QoS with strength for failover |
-| Logical isolation | DomainParticipant and Publisher/Subscriber partitions |
+| Logical isolation | DomainParticipant-level partitions (Connext extension) |
 | Observability | Dashboard app subscribes to all `OPS/*` partitions with SSE streaming |
 
 ---
