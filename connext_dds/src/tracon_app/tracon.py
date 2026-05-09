@@ -42,6 +42,7 @@ from common import (
     create_subscriber,
     load_airport_coords,
     load_qos_provider,
+    load_tracon_config,
     make_id,
     now_ms,
     reader_qos,
@@ -490,21 +491,19 @@ def main():
     parser = argparse.ArgumentParser(description="ATC TRACON Facility")
     parser.add_argument("--tracon-id", default="N90", help="TRACON facility ID")
     parser.add_argument("--controller-id", default=None, help="Controller ID")
-    parser.add_argument(
-        "--airports", nargs="+", default=["KJFK"],
-        help="Airport ICAO codes served by this TRACON",
-    )
-    parser.add_argument("--serving-center", default="", help="Overlying ARTCC center ID")
+    parser.add_argument("--airports", nargs="+", default=None, help="Airport codes (default: from config)")
+    parser.add_argument("--serving-center", default=None, help="Overlying center (default: from config)")
     parser.add_argument("--duration", type=float, default=120.0, help="Duration in seconds")
     args = parser.parse_args()
 
+    cfg = load_tracon_config(args.tracon_id)
     controller_id = args.controller_id or f"APP-{args.tracon_id}"
 
     tracon = TraconController(
         tracon_id=args.tracon_id,
         controller_id=controller_id,
-        airport_codes=args.airports,
-        serving_center=args.serving_center,
+        airport_codes=args.airports or cfg.get("airports", []),
+        serving_center=args.serving_center if args.serving_center is not None else cfg.get("serving_center", ""),
     )
     tracon.run(duration_s=args.duration)
 

@@ -52,6 +52,7 @@ from common import (
     create_subscriber,
     find_center_for_position,
     load_center_boundaries,
+    load_center_config,
     load_qos_provider,
     load_tracon_for_airport,
     make_id,
@@ -764,28 +765,6 @@ class EnRouteCenter:
         for sample in self.ack_reader.take_data():
             log.info("ACK from %s: %s", sample.tail_number, sample.status.name)
 
-    def initiate_handoff(
-        self,
-        tail_number: str,
-        to_controller_id: str,
-        from_type: FacilityType = FacilityType.CENTER,
-        to_type: FacilityType | None = None,
-    ):
-        """Hand off an aircraft to another controller."""
-        ho = Handoff(
-            handoff_id=make_id("HO-"),
-            tail_number=tail_number,
-            from_controller_id=self.controller_id,
-            to_controller_id=to_controller_id,
-            status=HandoffStatus.INITIATED,
-            from_facility_type=from_type,
-            to_facility_type=to_type,
-            sector=self.center_id,
-            initiated_at=now_ms(),
-        )
-        self.ho_writer.write(ho)
-        log.info("Initiated handoff of %s to %s", tail_number, to_controller_id)
-
     def run(self, duration_s: float = 120.0):
         """Main center control loop at ~1 Hz."""
         log.info("En-route center %s operational", self.center_id)
@@ -812,28 +791,26 @@ def main():
     parser = argparse.ArgumentParser(description="ATC En-Route Center")
     parser.add_argument("--center-id", default="ZNY", help="Center ID")
     parser.add_argument("--controller-id", default=None, help="Controller ID (default: CTR-<center-id>)")
-    parser.add_argument("--min-alt", type=int, default=18000, help="Min altitude (ft)")
-    parser.add_argument("--max-alt", type=int, default=60000, help="Max altitude (ft)")
+    parser.add_argument("--min-alt", type=int, default=None, help="Min altitude ft (default: from config)")
+    parser.add_argument("--max-alt", type=int, default=None, help="Max altitude ft (default: from config)")
     parser.add_argument("--duration", type=float, default=120.0, help="Duration in seconds")
     args = parser.parse_args()
 
-    # Deterministic controller ID so other facilities can address us
+    cfg = load_center_config(args.center_id)
     controller_id = args.controller_id or f"CTR-{args.center_id}"
+    min_alt = args.min_alt if args.min_alt is not None else cfg.get("min_altitude_ft", 18000)
+    max_alt = args.max_alt if args.max_alt is not None else cfg.get("max_altitude_ft", 60000)
 
-    # Load boundary data from scenario config
     all_boundaries = load_center_boundaries()
-    if args.center_id not in all_boundaries:
-        log.error("Center %s not found in scenario config", args.center_id)
-        sys.exit(1)
 
     center = EnRouteCenter(
         center_id=args.center_id,
         controller_id=controller_id,
-        boundary=all_boundaries[args.center_id],
+        boundary=cfg["boundary"],
         all_boundaries=all_boundaries,
         tracon_for_airport=load_tracon_for_airport(),
-        min_altitude_ft=args.min_alt,
-        max_altitude_ft=args.max_alt,
+        min_altitude_ft=min_alt,
+        max_altitude_ft=max_alt,
     )
     center.run(duration_s=args.duration)
 

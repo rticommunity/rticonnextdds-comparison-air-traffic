@@ -40,6 +40,7 @@ from common import (
     create_participant,
     create_publisher,
     create_subscriber,
+    load_aircraft_config,
     load_airport_coords,
     load_qos_provider,
     make_id,
@@ -237,6 +238,8 @@ class AirplaneSimulator:
                 reply_type=FlightPlanResponse,
                 participant=self.participant,
                 service_name="FlightPlanFilingService",
+                datawriter_qos=writer_qos(self.qos_provider, "FlightPlanRequestReplyProfile"),
+                datareader_qos=reader_qos(self.qos_provider, "FlightPlanRequestReplyProfile"),
             )
 
             if not requester.wait_for_service(dds.Duration(seconds=5)):
@@ -281,6 +284,8 @@ class AirplaneSimulator:
                 reply_type=GateAssignmentReply,
                 participant=self.participant,
                 service_name="GateAssignmentService",
+                datawriter_qos=writer_qos(self.qos_provider, "GateAssignmentRequestReplyProfile"),
+                datareader_qos=reader_qos(self.qos_provider, "GateAssignmentRequestReplyProfile"),
             )
 
             if not requester.wait_for_service(dds.Duration(seconds=5)):
@@ -524,16 +529,21 @@ def main():
     parser = argparse.ArgumentParser(description="ATC Aircraft Simulator")
     parser.add_argument("--tail-number", default=None, help="Aircraft tail number (e.g., N738WN)")
     parser.add_argument("--callsign", default="AAL123", help="Callsign")
-    parser.add_argument("--origin", default="KJFK", help="Origin airport")
-    parser.add_argument("--destination", default="KLAX", help="Destination airport")
+    parser.add_argument("--origin", default=None, help="Origin airport (default: from config)")
+    parser.add_argument("--destination", default=None, help="Destination airport (default: from config)")
     parser.add_argument("--duration", type=float, default=60.0, help="Duration in seconds")
     args = parser.parse_args()
 
+    cfg = load_aircraft_config(args.callsign)
+    tail = args.tail_number or (cfg.get("tail_number") if cfg else None) or _random_tail_number()
+    origin = args.origin or (cfg.get("origin") if cfg else None) or "KJFK"
+    destination = args.destination or (cfg.get("destination") if cfg else None) or "KLAX"
+
     airplane = AirplaneSimulator(
-        tail_number=args.tail_number or _random_tail_number(),
+        tail_number=tail,
         callsign=args.callsign,
-        origin=args.origin,
-        destination=args.destination,
+        origin=origin,
+        destination=destination,
     )
     airplane.run(duration_s=args.duration)
 

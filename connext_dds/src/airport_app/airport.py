@@ -29,8 +29,10 @@ from common import (
     create_participant,
     create_publisher,
     create_subscriber,
+    load_airport_config,
     load_qos_provider,
     now_ms,
+    reader_qos,
     setup_logging,
     writer_qos,
 )
@@ -94,6 +96,8 @@ class AirportInfrastructure:
             reply_type=GateAssignmentReply,
             participant=self.participant,
             service_name="GateAssignmentService",
+            datawriter_qos=writer_qos(self.qos_provider, "GateAssignmentRequestReplyProfile"),
+            datareader_qos=reader_qos(self.qos_provider, "GateAssignmentRequestReplyProfile"),
         )
 
         log.info("Airport %s initialized — runways: %s, gates: %d",
@@ -211,17 +215,17 @@ class AirportInfrastructure:
 def main():
     parser = argparse.ArgumentParser(description="ATC Airport Infrastructure")
     parser.add_argument("--airport-code", default="KJFK", help="ICAO airport code")
-    parser.add_argument("--runways", nargs="+", default=["04L/22R", "04R/22L", "13L/31R", "13R/31L"],
-                        help="Runway IDs")
-    parser.add_argument("--serving-tracon", default="", help="Serving TRACON facility ID")
+    parser.add_argument("--runways", nargs="+", default=None, help="Runway IDs (default: from config)")
+    parser.add_argument("--serving-tracon", default=None, help="Serving TRACON (default: from config)")
     parser.add_argument("--duration", type=float, default=120.0, help="Duration in seconds")
     parser.add_argument("--wx-interval", type=float, default=25.0, help="Weather report interval (s)")
     args = parser.parse_args()
 
+    cfg = load_airport_config(args.airport_code)
     airport = AirportInfrastructure(
         airport_code=args.airport_code,
-        runways=args.runways,
-        serving_tracon=args.serving_tracon,
+        runways=args.runways or cfg["runways"],
+        serving_tracon=args.serving_tracon if args.serving_tracon is not None else cfg.get("serving_tracon", ""),
     )
     airport.run(duration_s=args.duration, weather_interval_s=args.wx_interval)
 

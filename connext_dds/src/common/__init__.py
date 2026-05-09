@@ -49,6 +49,85 @@ def load_tracon_serving_center(config_path: str = SCENARIO_CONFIG) -> dict[str, 
     return {t["id"]: t["serving_center"] for t in data.get("tracons", []) if "serving_center" in t}
 
 
+# ── Per-entity config lookups ──────────────────────────────────────────
+
+
+def load_airport_config(airport_code: str, config_path: str = SCENARIO_CONFIG) -> dict:
+    """Look up a single airport's full config entry by code.
+
+    Returns dict with keys: code, name, latitude, longitude, runways, serving_tracon.
+    Raises KeyError if not found.
+    """
+    data = _load_scenario(config_path)
+    for a in data["airports"]:
+        if a["code"] == airport_code:
+            return a
+    raise KeyError(f"Airport '{airport_code}' not found in scenario config")
+
+
+def load_tracon_config(tracon_id: str, config_path: str = SCENARIO_CONFIG) -> dict:
+    """Look up a TRACON config entry by ID.
+
+    Returns dict with keys from the config (id, serving_center, ...)
+    plus a derived 'airports' list of airport codes served by this TRACON.
+    Raises KeyError if not found.
+    """
+    data = _load_scenario(config_path)
+    for t in data.get("tracons", []):
+        if t["id"] == tracon_id:
+            # Derive served airports by reverse-lookup
+            t["airports"] = [
+                a["code"] for a in data["airports"]
+                if a.get("serving_tracon") == tracon_id
+            ]
+            return t
+    raise KeyError(f"TRACON '{tracon_id}' not found in scenario config")
+
+
+def load_center_config(center_id: str, config_path: str = SCENARIO_CONFIG) -> dict:
+    """Look up a center config entry by ID.
+
+    Returns dict with keys: id, boundary, min_altitude_ft, max_altitude_ft.
+    Raises KeyError if not found.
+    """
+    data = _load_scenario(config_path)
+    for c in data["centers"]:
+        if c["id"] == center_id:
+            return c
+    raise KeyError(f"Center '{center_id}' not found in scenario config")
+
+
+def load_aircraft_config(callsign: str, config_path: str = SCENARIO_CONFIG) -> dict | None:
+    """Look up an aircraft config entry by callsign.
+
+    Returns dict with keys: callsign, tail_number, origin, destination.
+    Returns None if not found (aircraft may be ad-hoc).
+    """
+    data = _load_scenario(config_path)
+    for ac in data.get("aircraft", []):
+        if ac["callsign"] == callsign:
+            return ac
+    return None
+
+
+def load_scenario_info(config_path: str = SCENARIO_CONFIG) -> dict:
+    """Return scenario metadata + all entity IDs as a flat dict.
+
+    Keys:
+        scenario, duration_seconds,
+        airports (list), tracons (list), centers (list), aircraft (list)
+    """
+    data = _load_scenario(config_path)
+    return {
+        "scenario": data.get("scenario", "unnamed"),
+        "duration_seconds": data.get("duration_seconds", 120),
+        "airports": [a["code"] for a in data.get("airports", [])],
+        "tracons": [t["id"] for t in data.get("tracons", [])],
+        "centers": [c["id"] for c in data.get("centers", [])],
+        "aircraft": [ac["callsign"] for ac in data.get("aircraft", [])],
+    }
+
+
 def point_in_polygon(lat: float, lon: float, polygon: list[list[float]]) -> bool:
     """Ray-casting point-in-polygon test. Polygon is list of [lat, lon]."""
     n = len(polygon)

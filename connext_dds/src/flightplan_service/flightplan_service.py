@@ -24,6 +24,7 @@ from common import (
     create_publisher,
     load_qos_provider,
     now_ms,
+    reader_qos,
     setup_logging,
     writer_qos,
 )
@@ -73,6 +74,8 @@ class FlightPlanService:
             reply_type=FlightPlanResponse,
             participant=self.participant,
             service_name="FlightPlanFilingService",
+            datawriter_qos=writer_qos(self.qos_provider, "FlightPlanRequestReplyProfile"),
+            datareader_qos=reader_qos(self.qos_provider, "FlightPlanRequestReplyProfile"),
         )
 
         log.info("FlightPlanFilingService initialized")

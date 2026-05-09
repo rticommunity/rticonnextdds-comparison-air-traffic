@@ -37,6 +37,7 @@ from common import (
     create_participant,
     create_publisher,
     create_subscriber,
+    load_airport_config,
     load_qos_provider,
     make_id,
     now_ms,
@@ -406,16 +407,18 @@ def main():
     parser = argparse.ArgumentParser(description="ATC Control Tower")
     parser.add_argument("--airport-code", default="KJFK", help="Airport ICAO code")
     parser.add_argument("--controller-id", default=None, help="Controller ID")
-    parser.add_argument("--serving-tracon", default="", help="Serving TRACON facility ID")
+    parser.add_argument("--serving-tracon", default=None, help="Serving TRACON (default: from config)")
     parser.add_argument("--duration", type=float, default=120.0, help="Duration in seconds")
     args = parser.parse_args()
 
+    cfg = load_airport_config(args.airport_code)
     controller_id = args.controller_id or f"TWR-{args.airport_code}"
+    serving_tracon = args.serving_tracon if args.serving_tracon is not None else cfg.get("serving_tracon", "")
 
     tower = TowerController(
         airport_code=args.airport_code,
         controller_id=controller_id,
-        serving_tracon=args.serving_tracon,
+        serving_tracon=serving_tracon,
     )
     tower.run(duration_s=args.duration)
 

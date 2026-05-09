@@ -40,3 +40,27 @@ The atc_types should be generated from the air_traffic.idl using rtiddsgen. Also
 Is there a good way to show the centers and tracons, and the area they cover, in the dashboard? Is that typically disolayed in ATC dashboards?
 
 The Centers/Regions are defined in the scenario_default.json, but they layers are also hardcoded in the dashboard.py?
+
+Are there anused topics, datatypes or code?
+
+Modify the creation of Requesters and Repliers to use the proper Qos profile.
+
+It seems that there are a lot of other functions in common/init.py that processs the SCENARIO file to return configuration data to each app, lile the airport codes, etc. Isn;t that a simpler/cleaner way that depending on shell parsing of a JSON file and passing command-line paramaters. Can you evaluate the pros and cons of each approach and recommend one approach?
+
+> Recommendation: Approach B
+The apps already depend on scenario_default.json at runtime — airplane.py calls load_airport_coords(), center.py calls load_center_boundaries(), etc. The shell script is doing redundant work extracting the same data. The cleaner design is:
+
+Each app takes just its identity as a CLI arg (e.g., --center-id ZNY, --airport-code KJFK)
+The app looks up everything else from the config using the existing common helpers
+run_scenario.sh shrinks to just iterating IDs and launching apps
+Keep CLI overrides as optional flags for testing/one-off runs
+This would eliminate most of the inline Python in the shell script and the now-dead load_tracon_serving_center() would become the live code path. Want me to implement this refactor?
+
+> Yes implement the recommended approach B
+
+
+I still wonder if having a single call to eval $("$PYTHON" "$SRC_DIR/common/scenario_cli.py" "$SCENARIO_CONFIG")
+which magicallt sets. a bunch of variables that the the run_scenario.sh has to know is a complex/hidden/brittle interface. Rather run eval $("$PYTHON" "$SRC_DIR/common/scenario_cli.py" "$SCENARIO_CONFIG") multiple times passing an extra command-line parameter e.g. "airports" or "tracons" to get each individual list of IDs. that way the interface between the shell script and the python program is explicit and not hidden inside variable names that have to be set consistently.
+
+> Done. The interface is now explicit — each variable assignment shows exactly what key it's querying:
+
