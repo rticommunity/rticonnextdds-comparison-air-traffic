@@ -395,10 +395,36 @@
                      base_name="AirTrafficControl_QosLib::StateDataProfile"
                      is_default_qos="false"/>
 
-        <!-- Topic: AircraftTracking — plain state data -->
+        <!--
+            AircraftTrackingProfile
+            Topic: AircraftTracking — current controller of record.
+            Overrides StateDataProfile's EXCLUSIVE_OWNERSHIP with
+            SHARED_OWNERSHIP + BY_SOURCE_TIMESTAMP so that cooperative
+            handoffs converge without race conditions.  During handoff,
+            both the releasing and accepting controller may briefly write
+            the same instance; BY_SOURCE_TIMESTAMP ensures all readers
+            converge on the newest sample regardless of arrival order.
+        -->
         <qos_profile name="AircraftTrackingProfile"
                      base_name="AirTrafficControl_QosLib::StateDataProfile"
-                     is_default_qos="false"/>
+                     is_default_qos="false">
+            <datawriter_qos>
+                <ownership>
+                    <kind>SHARED_OWNERSHIP_QOS</kind>
+                </ownership>
+                <destination_order>
+                    <kind>BY_SOURCE_TIMESTAMP_DESTINATIONORDER_QOS</kind>
+                </destination_order>
+            </datawriter_qos>
+            <datareader_qos>
+                <ownership>
+                    <kind>SHARED_OWNERSHIP_QOS</kind>
+                </ownership>
+                <destination_order>
+                    <kind>BY_SOURCE_TIMESTAMP_DESTINATIONORDER_QOS</kind>
+                </destination_order>
+            </datareader_qos>
+        </qos_profile>
 
         <!-- Topic: FacilityStatus — state data + manual-by-topic liveliness
              so dashboard can detect facility crashes within 5 seconds -->

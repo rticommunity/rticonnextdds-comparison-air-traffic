@@ -70,6 +70,7 @@ class TowerController:
         self.tracked_aircraft: dict[str, AircraftPosition] = {}
         self.handed_off: set[str] = set()  # tail numbers already handed to TRACON
         self.controlling: set[str] = set()  # tails with active AircraftTracking instance
+        self.pending_handoffs: dict[str, str] = {}  # tail → handoff_id awaiting ACCEPTED
 
         # DDS setup
         self.qos_provider = load_qos_provider()
@@ -294,9 +295,8 @@ class TowerController:
                     initiated_at=now_ms(),
                 )
                 self.ho_writer.write(ho)
-                self._unregister_tracking(ac_id)
+                self.pending_handoffs[ac_id] = ho.handoff_id
                 self.handed_off.add(ac_id)
-                self.tracked_aircraft.pop(ac_id, None)
                 log.info("Handoff %s → TRACON (departing, %.0fft)", ac_id, pos.position.altitude_feet)
 
     def process_acknowledgments(self):
@@ -310,7 +310,7 @@ class TowerController:
             )
 
     def process_handoffs(self):
-        """Process incoming handoff requests."""
+        """Process incoming handoff requests and confirmations of outgoing ones."""
         for sample in self.ho_reader.take_data():
             if sample.to_controller_id == self.controller_id and sample.status == HandoffStatus.INITIATED:
                 from_type = ""
@@ -334,7 +334,23 @@ class TowerController:
                     completed_at=now_ms(),
                 )
                 self.ho_writer.write(accept)
+                # Publish tracking — with SHARED_OWNERSHIP + BY_SOURCE_TIMESTAMP,
+                # this newer sample immediately supersedes the old controller's at
+                # all readers, regardless of arrival order.
                 self._publish_tracking(sample.tail_number)
+
+            elif sample.from_controller_id == self.controller_id and \
+                 sample.status == HandoffStatus.ACCEPTED:
+                # Our outgoing handoff was accepted — clean up local state
+                tail = sample.tail_number
+                if tail in self.pending_handoffs:
+                    log.info(
+                        "Handoff of %s accepted by %s — releasing",
+                        tail, sample.to_controller_id,
+                    )
+                    del self.pending_handoffs[tail]
+                    self._unregister_tracking(tail)
+                    self.tracked_aircraft.pop(tail, None)
 
     # ── AircraftTracking lifecycle ─────────────────────────────────────
 

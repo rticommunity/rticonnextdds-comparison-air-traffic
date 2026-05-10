@@ -44,6 +44,7 @@ FlightPlan = ATC.FlightPlan
 Handoff = ATC.Handoff
 HandoffStatus = ATC.HandoffStatus
 InstructionType = ATC.InstructionType
+NavStatus = ATC.NavStatus
 PilotAcknowledgment = ATC.PilotAcknowledgment
 from common import (
     bearing_deg,
@@ -114,6 +115,8 @@ class EnRouteCenter:
         self.acquired_at: dict[str, float] = {}
         # Aircraft we've already handed off (avoid re-triggering)
         self.handed_off: set[str] = set()
+        # Pending handoff confirmations: tail → handoff_id
+        self.pending_handoffs: dict[str, str] = {}
         # Aircraft we've confirmed inside our polygon (prevents premature handoff)
         self.seen_inside: set[str] = set()
         # Cooldown for separation alerts per aircraft pair
@@ -275,6 +278,14 @@ class EnRouteCenter:
                 self.last_seen[tail] = time.time()
                 # Always update position — we are the controller of record
                 self.controlled_aircraft[tail] = sample
+                # Detect weather deviation inherited from a previous controller
+                if sample.nav_status == NavStatus.WEATHER_DEVIATION \
+                        and tail not in self._wx_deviating:
+                    self._wx_deviating.add(tail)
+                    log.info(
+                        "Inherited weather deviation for %s from previous controller",
+                        tail,
+                    )
                 if inside:
                     self.seen_inside.add(tail)
                 elif tail not in self.handed_off:
@@ -421,6 +432,26 @@ class EnRouteCenter:
                     "Aircraft %s left %s but no neighboring center found at (%.2f, %.2f)",
                     tail, self.center_id, pos.position.latitude, pos.position.longitude,
                 )
+                # If the aircraft is weather-deviating and we can't hand it
+                # off, clear the deviation now — keeping it on a fixed heading
+                # into uncontrolled airspace is worse than resuming navigation.
+                if tail in self._wx_deviating:
+                    wp_name = self._find_forward_waypoint(tail, pos)
+                    clearance_text = f"RESUME OWN NAV DIRECT {wp_name}" if wp_name else "RESUME OWN NAV"
+                    instr = ControllerInstruction(
+                        instruction_id=make_id("WX-CLR-"),
+                        controller_id=self.controller_id,
+                        tail_number=tail,
+                        instruction_type=InstructionType.CLEARANCE,
+                        clearance_text=clearance_text,
+                        issued_at=now_ms(),
+                    )
+                    self.instr_writer.write(instr)
+                    self._wx_deviating.discard(tail)
+                    log.info(
+                        "WEATHER CLEAR (no neighbor): %s — %s",
+                        tail, clearance_text,
+                    )
                 return
 
         ho = Handoff(
@@ -435,18 +466,18 @@ class EnRouteCenter:
             initiated_at=now_ms(),
         )
         self.ho_writer.write(ho)
-        self._unregister_tracking(tail)
+        # Retain tracking — with SHARED_OWNERSHIP + BY_SOURCE_TIMESTAMP,
+        # the accepting controller's write will supersede ours by timestamp.
+        # We clean up when we see the ACCEPTED response.
+        self.pending_handoffs[tail] = ho.handoff_id
         self.handed_off.add(tail)
-        self.controlled_aircraft.pop(tail, None)
-        self.last_seen.pop(tail, None)
-        self.acquired_at.pop(tail, None)
         self.seen_inside.discard(tail)
         self._wx_deviating.discard(tail)
 
     # ── Handoff: accept incoming ───────────────────────────────────────
 
     def process_handoffs(self):
-        """Accept incoming handoffs from TRACON or neighboring center."""
+        """Accept incoming handoffs and process confirmations of outgoing ones."""
         for sample in self.ho_reader.take_data():
             if sample.to_controller_id == self.controller_id and \
                sample.status == HandoffStatus.INITIATED:
@@ -478,7 +509,25 @@ class EnRouteCenter:
                 self.handed_off.discard(sample.tail_number)
                 self.seen_inside.discard(sample.tail_number)
                 self.alerted_uncoordinated.discard(sample.tail_number)
+                # Publish tracking — with SHARED_OWNERSHIP + BY_SOURCE_TIMESTAMP,
+                # this newer sample immediately supersedes the old controller's at
+                # all readers, regardless of arrival order.
                 self._publish_tracking(sample.tail_number)
+
+            elif sample.from_controller_id == self.controller_id and \
+                 sample.status == HandoffStatus.ACCEPTED:
+                # Our outgoing handoff was accepted — clean up local state
+                tail = sample.tail_number
+                if tail in self.pending_handoffs:
+                    log.info(
+                        "Handoff of %s accepted by %s — releasing",
+                        tail, sample.to_controller_id,
+                    )
+                    del self.pending_handoffs[tail]
+                    self._unregister_tracking(tail)
+                    self.controlled_aircraft.pop(tail, None)
+                    self.last_seen.pop(tail, None)
+                    self.acquired_at.pop(tail, None)
 
     # ── AircraftTracking lifecycle ─────────────────────────────────────
 
@@ -585,8 +634,12 @@ class EnRouteCenter:
             return
 
         now = time.time()
+        # Only deviate aircraft in climb/cruise.  Descending aircraft are
+        # committed to arrival and will be handed to TRACON shortly — TRACON
+        # has no weather-cell logic, so deviating here would strand them on
+        # a fixed heading with no one to issue the CLEARANCE.
         airborne_phases = frozenset([
-            FlightPhase.CLIMB, FlightPhase.CRUISE, FlightPhase.DESCENT,
+            FlightPhase.CLIMB, FlightPhase.CRUISE,
         ])
 
         for tail, pos in list(self.controlled_aircraft.items()):

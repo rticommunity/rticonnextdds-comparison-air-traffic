@@ -94,6 +94,7 @@ class TraconController:
         self.handed_off: set[str] = set()  # tail numbers already handed off this cycle
         self.acquired_aircraft: set[str] = set()  # aircraft formally received via handoff
         self.controlling: set[str] = set()  # tails with active AircraftTracking instance
+        self.pending_handoffs: dict[str, str] = {}  # tail → handoff_id awaiting ACCEPTED
         self._sep_cooldown: dict[tuple[str, str], float] = {}  # (tail_a, tail_b) -> last alert time
 
         # DDS setup
@@ -328,13 +329,11 @@ class TraconController:
             # Departing aircraft climbing above center handoff altitude → hand to center
             if self._is_departing(pos) and alt >= self.CENTER_HANDOFF_ALT:
                 self._initiate_handoff_to_center(tail, pos)
-                self._unregister_tracking(tail)
                 self.handed_off.add(tail)
 
             # Arriving aircraft descended below tower handoff altitude → hand to tower
             elif self._is_arriving(pos) and alt <= self.TOWER_HANDOFF_ALT:
                 self._initiate_handoff_to_tower(tail, pos)
-                self._unregister_tracking(tail)
                 self.handed_off.add(tail)
 
     def _initiate_handoff_to_center(self, tail: str, pos: AircraftPosition):
@@ -351,6 +350,7 @@ class TraconController:
             initiated_at=now_ms(),
         )
         self.ho_writer.write(ho)
+        self.pending_handoffs[tail] = ho.handoff_id
         log.info("Handoff %s → Center (departing, FL%d)", tail, int(pos.position.altitude_feet) // 100)
 
     def _initiate_handoff_to_tower(self, tail: str, pos: AircraftPosition):
@@ -367,11 +367,12 @@ class TraconController:
             initiated_at=now_ms(),
         )
         self.ho_writer.write(ho)
+        self.pending_handoffs[tail] = ho.handoff_id
         log.info("Handoff %s → Tower %s (arriving, %.0fft)",
                  tail, pos.destination_airport, pos.position.altitude_feet)
 
     def process_handoffs(self):
-        """Process incoming handoffs (from center or tower)."""
+        """Process incoming handoffs and confirmations of outgoing ones."""
         for sample in self.ho_reader.take_data():
             if sample.to_controller_id == self.controller_id and \
                sample.status == HandoffStatus.INITIATED:
@@ -395,7 +396,23 @@ class TraconController:
                 )
                 self.ho_writer.write(accept)
                 self.acquired_aircraft.add(sample.tail_number)
+                # Publish tracking — with SHARED_OWNERSHIP + BY_SOURCE_TIMESTAMP,
+                # this newer sample immediately supersedes the old controller's at
+                # all readers, regardless of arrival order.
                 self._publish_tracking(sample.tail_number)
+
+            elif sample.from_controller_id == self.controller_id and \
+                 sample.status == HandoffStatus.ACCEPTED:
+                # Our outgoing handoff was accepted — clean up local state
+                tail = sample.tail_number
+                if tail in self.pending_handoffs:
+                    log.info(
+                        "Handoff of %s accepted by %s — releasing",
+                        tail, sample.to_controller_id,
+                    )
+                    del self.pending_handoffs[tail]
+                    self._unregister_tracking(tail)
+                    self.tracked_aircraft.pop(tail, None)
 
     # ── AircraftTracking lifecycle ─────────────────────────────────────
 
