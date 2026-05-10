@@ -2,5 +2,4 @@
 __pycache__/
 .DS_Store
 .vscode
-iterations/
-gateway_1.xml
+venv/
