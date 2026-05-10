@@ -362,7 +362,10 @@ def _snapshot():
             "handoff_log": list(state["handoff_log"]),
             "pulse_centers": pulses,
             "facility_status": facility_status,
-            "convective_cells": list(state["convective_cells"].values()),
+            "convective_cells": [
+                {**cc, "injected": cc["cell_id"] in _injected_cells}
+                for cc in state["convective_cells"].values()
+            ],
             "kpi": {
                 "aircraft": len(state["positions"]),
                 "flight_plans": len(state["flight_plans"]),
@@ -952,6 +955,17 @@ tr.selected td { background: rgba(78,168,222,0.18); }
     </div>
   </div>
 
+  <!-- Convective Cells -->
+  <div class="section collapsed">
+    <div class="section-hdr" onclick="toggleSection(this)">&#9889; Convective Cells <span class="badge" id="cc-count">0</span></div>
+    <div class="section-body">
+    <div class="table-wrap">
+      <table><thead><tr><th>Cell</th><th>Severity</th><th>Radius</th><th>Alt</th><th>Move</th></tr></thead>
+      <tbody id="cc-body"></tbody></table>
+    </div>
+    </div>
+  </div>
+
   <!-- Handoff Log -->
   <div class="section collapsed">
     <div class="section-hdr" onclick="toggleSection(this)">&#128260; Handoff Log <span class="badge" id="ho-count">0</span></div>
@@ -962,7 +976,7 @@ tr.selected td { background: rgba(78,168,222,0.18); }
 
   <!-- Message Counts -->
   <div class="section collapsed">
-    <div class="section-hdr" onclick="toggleSection(this)">Message Counts</div>
+    <div class="section-hdr" onclick="toggleSection(this)">Message Counts <span class="badge" id="msg-total">0</span></div>
     <div class="section-body">
     <table class="counters" id="counters-table"></table>
     </div>
@@ -1054,7 +1068,23 @@ CENTERS.forEach(function(c) {
     fillColor: color, fillOpacity: 0.04,
     dashArray: "6 4", bubblingMouseEvents: true
   });
-  poly.bindTooltip(c.id + " — " + c.name, { sticky: true, className: "airspace-tooltip" });
+  poly.bindTooltip("", { sticky: true, className: "airspace-tooltip" });
+  (function(cid, name) {
+    poly.on("tooltipopen", function() {
+      var aircraft = [];
+      Object.keys(lastTracking).forEach(function(tail) {
+        if (lastTracking[tail].facility_id === cid) aircraft.push(tail);
+      });
+      var lines = aircraft.map(function(tail) {
+        var ac = lastPositions.find(function(a) { return a.tail_number === tail; });
+        return ac ? ac.callsign + " (" + tail + ")" : tail;
+      });
+      var html = "<strong>" + cid + "</strong> — " + name +
+        "<br>Tracking: <strong>" + aircraft.length + "</strong> aircraft";
+      if (lines.length > 0) html += "<br><span style='font-size:0.85em'>" + lines.join(", ") + "</span>";
+      poly.getTooltip().setContent(html);
+    });
+  })(c.id, c.name);
   centerLayer.addLayer(poly);
   centerPolygons[c.id] = poly;
 });
@@ -1109,8 +1139,8 @@ function renderWeatherCells(cells) {
       circle.bindPopup(
         "<strong>" + c.severity + "</strong> " + c.cell_id +
         "<br>r=" + c.radius_nm + "nm FL" + Math.round(c.base_alt/100) + "-FL" + Math.round(c.top_alt/100) +
-        '<br><button onclick="removeWeatherCell(\'' + c.cell_id + '\')" style="margin-top:4px;padding:3px 10px;' +
-        'background:#f44336;color:#fff;border:none;border-radius:3px;cursor:pointer;font-size:12px">Remove Cell</button>'
+        (c.injected ? '<br><button onclick="removeWeatherCell(\'' + c.cell_id + '\')" style="margin-top:4px;padding:3px 10px;' +
+        'background:#f44336;color:#fff;border:none;border-radius:3px;cursor:pointer;font-size:12px">Remove Cell</button>' : '')
       );
       weatherLayer.addLayer(circle);
       weatherCircles[c.cell_id] = circle;
@@ -1193,6 +1223,13 @@ function toggleFacilityPopup(facId, facType) {
   layer.unbindPopup();
   layer.bindPopup(html, { maxHeight: 200 });
   layer.openPopup();
+}
+
+function toggleWeatherCellPopup(cellId) {
+  var circle = weatherCircles[cellId];
+  if (!circle) return;
+  if (circle.isPopupOpen()) circle.closePopup();
+  else circle.openPopup();
 }
 
 /* ── Aircraft SVG icon factory ───────────────────────────────────── */
@@ -1488,7 +1525,19 @@ function update(d) {
   // Map
   renderAircraft(d.positions, d.trails, d.tracking);
   updateAirportWeather(d.weather);
-  if (d.convective_cells) renderWeatherCells(d.convective_cells);
+  if (d.convective_cells) {
+    renderWeatherCells(d.convective_cells);
+    document.getElementById("cc-count").textContent = d.convective_cells.length;
+    renderTable("cc-body", d.convective_cells.map(function(c) {
+      var sc = WX_SEVERITY_COLOR[c.severity] || WX_SEVERITY_COLOR.MODERATE;
+      return '<tr onclick="toggleWeatherCellPopup(\'' + c.cell_id + '\')">' +
+             '<td>' + c.cell_id + '</td>' +
+             '<td><span style="color:' + sc.color + '">' + c.severity + '</span></td>' +
+             '<td>' + c.radius_nm + ' nm</td>' +
+             '<td>FL' + Math.round(c.base_alt/100) + '-' + Math.round(c.top_alt/100) + '</td>' +
+             '<td>' + Math.round(c.heading) + '&deg; ' + c.speed_kt + 'kt</td></tr>';
+    }).join(""));
+  }
 
   // Aircraft table
   lastPositions = d.positions;
@@ -1552,9 +1601,12 @@ function update(d) {
   var ct = document.getElementById("counters-table");
   var names = ["AircraftPosition","ControllerInstruction","PilotAcknowledgment",
                "FlightPlan","RunwayStatus","WeatherReport","Handoff","Alert","AircraftTracking","FacilityStatus","ConvectiveCell"];
+  var msgTotal = 0;
   ct.innerHTML = names.map(function(n) {
-    return "<tr><td>" + n + "</td><td>" + (d.counters[n] || 0) + "</td></tr>";
+    var v = d.counters[n] || 0; msgTotal += v;
+    return "<tr><td>" + n + "</td><td>" + v + "</td></tr>";
   }).join("");
+  document.getElementById("msg-total").textContent = msgTotal.toLocaleString();
 
   // Facility Status
   lastTracking = d.tracking || lastTracking;
