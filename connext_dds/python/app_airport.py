@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Real-Time Innovations, Inc.
+# SPDX-License-Identifier: Apache-2.0
 """
 Airport Infrastructure Application — Publishes weather reports, runway status,
 and acts as Gate Assignment replier.

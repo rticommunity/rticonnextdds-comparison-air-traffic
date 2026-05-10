@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Real-Time Innovations, Inc.
+# SPDX-License-Identifier: Apache-2.0
 """Print a single scenario field as a space-separated string.
 
 Usage:  python scenario_cli.py <config.json> <key>

@@ -739,7 +739,7 @@ connext_dds/
 │   ├── Handoff_Protocol.mermaid
 │   └── Handoff_Protocol.svg
 ├── python/
-│   ├── air_traffic.py               # rtiddsgen-generated Python types (DO NOT HAND-EDIT)
+│   ├── air_traffic_types.py          # rtiddsgen-generated Python types (DO NOT HAND-EDIT)
 │   ├── common.py                    # Shared utilities (DDS helpers, sim speed, airport coords)
 │   ├── app_airplane.py              # Aircraft simulator + requester
 │   ├── app_tower.py                 # Control tower logic
@@ -749,7 +749,16 @@ connext_dds/
 │   ├── app_flightplan_service.py    # Flight plan filing replier
 │   ├── app_weather_service.py       # Convective weather cell publisher
 │   ├── app_dashboard.py             # Flask + SSE + Leaflet.js map
-│   └── types_generate.sh            # Run rtiddsgen on IDL → air_traffic.py
+│   ├── types_generate.sh            # Run rtiddsgen on IDL → air_traffic_types.py
+│   └── spec/                        # Per-application specifications
+│       ├── app_airplane_spec.md
+│       ├── app_airport_spec.md
+│       ├── app_center_spec.md
+│       ├── app_dashboard_spec.md
+│       ├── app_flightplan_service_spec.md
+│       ├── app_tower_spec.md
+│       ├── app_tracon_spec.md
+│       └── app_weather_service_spec.md
 ├── scripts/
 │   ├── demo_start.sh                # Config-driven multi-process launcher
 │   ├── demo_stop.sh                 # Kill all running ATC processes
@@ -764,7 +773,7 @@ connext_dds/
 | Feature | Usage in ATC System |
 |---|---|
 | **XML-Based Application Creation** | Centralize domain/topic/QoS definitions; share same XML across all apps |
-| **rtiddsgen Python Code Generation** | Types defined in IDL, generated to Python via `rtiddsgen -language Python`; all apps import generated `air_traffic.py` |
+| **rtiddsgen Python Code Generation** | Types defined in IDL, generated to Python via `rtiddsgen -language Python`; all apps import generated `air_traffic_types.py` |
 | **Modern Python API** | `rti.connextdds` for pub/sub; `rti.rpc` `Requester`/`Replier` for request-reply |
 | **Built-in QoS Profiles** | Inherit from `Pattern.PeriodicData`, `Pattern.Status`, `Pattern.RPC`, etc. |
 | **QoS Snippets** | Compose with `QosSnippetLib` for discovery optimization |

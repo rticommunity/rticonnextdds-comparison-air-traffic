@@ -1,4 +1,6 @@
 <?xml version="1.0"?>
+<!-- SPDX-FileCopyrightText: 2026 Real-Time Innovations, Inc. -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
 <dds xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
      xsi:noNamespaceSchemaLocation="http://community.rti.com/schema/current/rti_routing_service.xsd">
 

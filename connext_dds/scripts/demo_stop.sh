@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Real-Time Innovations, Inc.
+# SPDX-License-Identifier: Apache-2.0
 #
 # demo_stop.sh — Stop running ATC demo applications.
 #

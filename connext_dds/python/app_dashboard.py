@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Real-Time Innovations, Inc.
+# SPDX-License-Identifier: Apache-2.0
 """
 ATC Web Dashboard — Flask + SSE + Leaflet.js real-time map.
 

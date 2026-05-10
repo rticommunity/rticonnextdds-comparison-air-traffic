@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Real-Time Innovations, Inc.
+# SPDX-License-Identifier: Apache-2.0
 """
 Flight Plan Filing Service — Central replier that validates and accepts/rejects
 flight plans, then publishes accepted plans on the FlightPlan topic.
