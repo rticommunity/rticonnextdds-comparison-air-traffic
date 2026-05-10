@@ -130,6 +130,9 @@ class EnRouteCenter:
         self.alerted_uncoordinated: set[str] = set()
         # Grace period (seconds) before forwarding a never-entered aircraft
         self.NEVER_ENTERED_GRACE_S = 30.0
+        # Startup grace: suppress uncoordinated alerts while handoffs settle
+        self._startup_time = time.time()
+        self.STARTUP_GRACE_S = 15.0
 
         # Compute bounding box for the CFT geographic filter
         min_lat, max_lat, min_lon, max_lon = polygon_bbox(boundary)
@@ -300,8 +303,7 @@ class EnRouteCenter:
                         # Never entered our polygon — after grace period, check
                         # if it's actually in another center and forward it
                         acq = self.acquired_at.get(tail, time.time())
-                        grace = self.NEVER_ENTERED_GRACE_S / max(self._sim_speed, 0.1)
-                        if (time.time() - acq) > grace:
+                        if (time.time() - acq) > self.NEVER_ENTERED_GRACE_S:
                             neighbor = find_center_for_position(
                                 sample.position.latitude, sample.position.longitude,
                                 self.all_boundaries, exclude=self.center_id,
@@ -314,7 +316,9 @@ class EnRouteCenter:
                                 self._handoff_exiting_aircraft(sample)
             elif inside and tail not in self.controlled_aircraft and tail not in self.handed_off:
                 # Aircraft in our polygon that we're not tracking → alert
-                if tail not in self.alerted_uncoordinated:
+                # (suppress during startup while handoffs settle)
+                if tail not in self.alerted_uncoordinated and \
+                        (time.time() - self._startup_time) > self.STARTUP_GRACE_S:
                     self._alert_uncoordinated(sample)
 
         # Check for controlled aircraft that disappeared from CFT (flew beyond bbox)

@@ -102,6 +102,9 @@ class TraconController:
         self.pending_handoffs: dict[str, str] = {}  # tail → handoff_id awaiting ACCEPTED
         self._sep_cooldown: dict[tuple[str, str], float] = {}  # (tail_a, tail_b) -> last alert time
         self._last_speed_issued: dict[str, float] = {}  # tail → last speed target issued
+        # Startup grace: suppress separation alerts while traffic settles
+        self._startup_time = time.time()
+        self._STARTUP_GRACE_S = 15.0
 
         # DDS setup
         self.qos_provider = load_qos_provider()
@@ -260,8 +263,13 @@ class TraconController:
         """Check for separation violations in the terminal area.
 
         Terminal area uses tighter separation: 3 nm lateral / 1000 ft vertical.
-        Skips ground-phase aircraft and suppresses duplicate alerts per pair.
+        Skips ground-phase aircraft, co-departing aircraft (both in DEPARTURE
+        phase), and suppresses duplicate alerts per pair.
         """
+        # Suppress during startup while traffic settles
+        if (time.time() - self._startup_time) < self._STARTUP_GRACE_S:
+            return
+
         airborne = [
             p for p in self.tracked_aircraft.values()
             if p.flight_phase not in self._GROUND_PHASES
@@ -269,6 +277,10 @@ class TraconController:
         now = time.time()
         for i, a in enumerate(airborne):
             for b in airborne[i + 1:]:
+                # Skip co-departing aircraft — they diverge under tower control
+                if a.flight_phase == FlightPhase.DEPARTURE and \
+                        b.flight_phase == FlightPhase.DEPARTURE:
+                    continue
                 lat_diff = abs(a.position.latitude - b.position.latitude)
                 lon_diff = abs(a.position.longitude - b.position.longitude)
                 alt_diff = abs(a.position.altitude_feet - b.position.altitude_feet)
