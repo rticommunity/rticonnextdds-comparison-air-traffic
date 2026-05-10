@@ -356,7 +356,7 @@ def _snapshot():
             "trails": trails,
             "weather": list(state["weather"].values()),
             "flight_plans": list(state["flight_plans"].values()),
-            "alerts": state["alerts"][-20:],
+            "alerts": state["alerts"][-200:],
             "counters": dict(state["counters"]),
             "tracking": dict(state["tracking"]),
             "handoff_log": list(state["handoff_log"]),
@@ -835,7 +835,7 @@ tr.selected td { background: rgba(78,168,222,0.18); }
 <!-- Side panel -->
 <div id="panel">
   <!-- Add Weather Cell -->
-  <div class="section">
+  <div class="section collapsed">
     <div class="section-hdr" onclick="toggleSection(this)">&#9928; Add Weather Cell</div>
     <div class="section-body">
     <div class="spawn-form">
@@ -878,7 +878,7 @@ tr.selected td { background: rgba(78,168,222,0.18); }
   </div>
 
   <!-- Add Aircraft -->
-  <div class="section">
+  <div class="section collapsed">
     <div class="section-hdr" onclick="toggleSection(this)">&#128747; Add Aircraft</div>
     <div class="section-body">
     <div class="spawn-form">
@@ -911,17 +911,6 @@ tr.selected td { background: rgba(78,168,222,0.18); }
     </div>
   </div>
 
-  <!-- Weather -->
-  <div class="section">
-    <div class="section-hdr" onclick="toggleSection(this)">Weather</div>
-    <div class="section-body">
-    <div class="table-wrap">
-      <table><thead><tr><th>Airport</th><th>Cond</th><th>Wind</th><th>Vis</th><th>Ceil</th></tr></thead>
-      <tbody id="wx-body"></tbody></table>
-    </div>
-    </div>
-  </div>
-
   <!-- Facility Status -->
   <div class="section">
     <div class="section-hdr" onclick="toggleSection(this)">&#127959;&#65039; Facility Status <span class="badge" id="fac-online">0</span></div>
@@ -933,8 +922,16 @@ tr.selected td { background: rgba(78,168,222,0.18); }
     </div>
   </div>
 
+  <!-- Alerts -->
+  <div class="section collapsed">
+    <div class="section-hdr" onclick="toggleSection(this)">&#128680; Alerts <span class="badge" id="alert-count">0</span></div>
+    <div class="section-body">
+    <div id="alerts-box"></div>
+    </div>
+  </div>
+
   <!-- Flight Plans -->
-  <div class="section">
+  <div class="section collapsed">
     <div class="section-hdr" onclick="toggleSection(this)">Flight Plans <span class="badge" id="fp-count">0</span></div>
     <div class="section-body">
     <div class="table-wrap">
@@ -944,25 +941,28 @@ tr.selected td { background: rgba(78,168,222,0.18); }
     </div>
   </div>
 
-  <!-- Alerts -->
-  <div class="section">
-    <div class="section-hdr" onclick="toggleSection(this)">&#128680; Alerts <span class="badge" id="alert-count">0</span></div>
+  <!-- Weather -->
+  <div class="section collapsed">
+    <div class="section-hdr" onclick="toggleSection(this)">Weather</div>
     <div class="section-body">
-    <div id="alerts-box"></div>
+    <div class="table-wrap">
+      <table><thead><tr><th>Airport</th><th>Cond</th><th>Wind</th><th>Vis</th><th>Ceil</th></tr></thead>
+      <tbody id="wx-body"></tbody></table>
+    </div>
     </div>
   </div>
 
   <!-- Handoff Log -->
-  <div class="section">
+  <div class="section collapsed">
     <div class="section-hdr" onclick="toggleSection(this)">&#128260; Handoff Log <span class="badge" id="ho-count">0</span></div>
     <div class="section-body">
     <div id="handoff-log"><div class="empty">No handoffs yet</div></div>
     </div>
   </div>
 
-  <!-- Counters -->
-  <div class="section">
-    <div class="section-hdr" onclick="toggleSection(this)">DDS Samples</div>
+  <!-- Message Counts -->
+  <div class="section collapsed">
+    <div class="section-hdr" onclick="toggleSection(this)">Message Counts</div>
     <div class="section-body">
     <table class="counters" id="counters-table"></table>
     </div>
@@ -1059,6 +1059,7 @@ CENTERS.forEach(function(c) {
   centerPolygons[c.id] = poly;
 });
 
+var traconCircles = {};
 TRACONS.forEach(function(t) {
   var circle = L.circle([t.lat, t.lon], {
     radius: t.radius_nm * NM_TO_METERS,
@@ -1068,6 +1069,7 @@ TRACONS.forEach(function(t) {
   });
   circle.bindTooltip(t.id + " — " + t.name, { sticky: true, className: "airspace-tooltip" });
   traconLayer.addLayer(circle);
+  traconCircles[t.id] = circle;
 });
 
 centerLayer.addTo(map);
@@ -1147,6 +1149,51 @@ function ensureAirportMarker(code) {
   m.bindPopup("<strong>" + code + "</strong><br>" + a.name + "<br><span id='wx-popup-" + code + "' style='color:#888'></span>");
   airportMarkers[code] = m;
 }
+function toggleAirportPopup(code) {
+  ensureAirportMarker(code);
+  var m = airportMarkers[code];
+  if (!m) return;
+  if (m.isPopupOpen()) m.closePopup();
+  else m.openPopup();
+}
+
+function toggleFacilityPopup(facId, facType) {
+  var layer = null;
+  if (facType === 'CENTER') layer = centerPolygons[facId];
+  else if (facType === 'TRACON') layer = traconCircles[facId];
+  else if (facType === 'TOWER') {
+    // Tower facility IDs match airport codes
+    var code = facId.replace(/^TWR-/, '');
+    toggleAirportPopup(code);
+    return;
+  }
+  if (!layer) return;
+  if (layer.isPopupOpen()) { layer.closePopup(); return; }
+  // Build aircraft list from tracking data
+  var aircraft = [];
+  Object.keys(lastTracking).forEach(function(tail) {
+    if (lastTracking[tail].facility_id === facId) aircraft.push(tail);
+  });
+  // Find callsigns from lastPositions
+  var lines = aircraft.map(function(tail) {
+    var ac = lastPositions.find(function(a) { return a.tail_number === tail; });
+    return ac ? ac.callsign + ' (' + tail + ')' : tail;
+  });
+  var nameInfo = '';
+  if (facType === 'CENTER') {
+    var ci = CENTERS.find(function(c) { return c.id === facId; });
+    if (ci) nameInfo = '<br><span style="color:#aaa">' + ci.name + '</span>';
+  } else if (facType === 'TRACON') {
+    var ti = TRACONS.find(function(t) { return t.id === facId; });
+    if (ti) nameInfo = '<br><span style="color:#aaa">' + ti.name + '</span>';
+  }
+  var html = '<strong>' + facId + '</strong>' + nameInfo +
+    '<br>Tracking: <strong>' + aircraft.length + '</strong> aircraft';
+  if (lines.length > 0) html += '<br><span style="font-size:0.85em;color:#ccc">' + lines.join('<br>') + '</span>';
+  layer.unbindPopup();
+  layer.bindPopup(html, { maxHeight: 200 });
+  layer.openPopup();
+}
 
 /* ── Aircraft SVG icon factory ───────────────────────────────────── */
 function aircraftSvg(heading, color) {
@@ -1176,6 +1223,7 @@ var waypointLayer = null;   // L.layerGroup for selected aircraft waypoints
 var selectedAircraftId = null;
 var lastPositions = [];     // cache for click lookup
 var lastFlightPlans = [];   // cache for waypoint lookup
+var lastTracking = {};      // cache for facility popup lookup
 
 /* ── Panel toggle ────────────────────────────────────────────────── */
 function togglePanel() {
@@ -1466,7 +1514,8 @@ function update(d) {
 
   // Weather table
   renderTable("wx-body", d.weather.map(function(w) {
-    return "<tr><td>" + w.airport + "</td><td>" + w.condition + "</td>" +
+    return '<tr onclick="toggleAirportPopup(\'' + w.airport + '\')">' +
+           "<td>" + w.airport + "</td><td>" + w.condition + "</td>" +
            "<td>" + w.wind + "</td><td>" + w.vis_m + "</td><td>" + w.ceiling_ft + "</td></tr>";
   }).join(""));
 
@@ -1508,6 +1557,7 @@ function update(d) {
   }).join("");
 
   // Facility Status
+  lastTracking = d.tracking || lastTracking;
   if (d.facility_status) {
     var fb = document.getElementById("fac-body");
     var onlineCount = 0;
@@ -1519,7 +1569,8 @@ function update(d) {
         var col = CENTER_COLORS[f.facility_id] || '#4fc3f7';
         swatch = '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + col + ';margin-right:4px;vertical-align:middle"></span>';
       }
-      return '<tr><td>' + swatch + f.facility_id + '</td><td><span class="fac-type">' +
+      return '<tr onclick="toggleFacilityPopup(\'' + f.facility_id + '\', \'' + f.facility_type + '\')">' +
+             '<td>' + swatch + f.facility_id + '</td><td><span class="fac-type">' +
              f.facility_type + '</span></td><td>' + dot + '</td><td>' +
              f.tracked + '</td></tr>';
     }).join("");
