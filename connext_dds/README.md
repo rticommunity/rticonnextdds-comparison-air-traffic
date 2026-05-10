@@ -44,7 +44,7 @@ connext_dds/
 
 ### Prerequisites
 
-- RTI Connext DDS 7.7.0 Professional
+- [RTI Connext DDS 7.7.0 Professional](https://community.rti.com/static/documentation/developers/)
 - Python 3.10+
 - Virtual environment set up via `source ../setup.sourceme`
 
@@ -59,8 +59,7 @@ cd ..
 ### Run
 
 ```bash
-cd scripts
-./demo_start.sh all --duration 120
+./scripts/demo_start.sh
 ```
 
 Open http://localhost:8050 for the real-time dashboard.
@@ -68,7 +67,7 @@ Open http://localhost:8050 for the real-time dashboard.
 ### Stop
 
 ```bash
-./demo_stop.sh
+./scripts/demo_stop.sh
 ```
 
 ## DDS Design Highlights

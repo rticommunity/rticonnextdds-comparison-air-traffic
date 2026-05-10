@@ -24,19 +24,19 @@ A simulated national air-traffic control system spanning multiple airports. Airc
 ### Data Flows
 
 ```
-┌──────────────┐    handoffs    ┌──────────────┐
-│ En-Route      │◄─────────────►│ En-Route      │
-│ Center A      │               │ Center B      │
+┌──────────────┐    handoffs   ┌──────────────┐
+│ En-Route     │◄─────────────►│ En-Route     │
+│ Center A     │               │ Center B     │
 └──────┬───────┘               └───────┬──────┘
        │                               │
   ┌────▼─────┐                   ┌─────▼────┐
-  │ TRACON 1  │                   │ TRACON 2  │
+  │ TRACON 1 │                   │ TRACON 2 │
   └────┬─────┘                   └─────┬────┘
        │                               │
-  ┌────▼─────┐                   ┌─────▼────┐
-  │ Tower 1   │                   │ Tower 2   │
-  │(Airport 1)│                   │(Airport 2)│
-  └────┬─────┘                   └─────┬────┘
+  ┌────▼──────┐                  ┌─────▼─────┐
+  │ Tower 1   │                  │ Tower 2   │
+  │(Airport 1)│                  │(Airport 2)│
+  └────┬────-─┘                  └─────┬──-──┘
        │                               │
   ✈ ✈ ✈ ✈                         ✈ ✈ ✈ ✈
  Aircraft at                      Aircraft at
@@ -44,13 +44,13 @@ A simulated national air-traffic control system spanning multiple airports. Airc
 
        ✈  ✈  ✈  ✈  ✈  (en-route aircraft)
 
-┌────────────────────┐   ┌───────────────────┐
-│ Flight Plan Service │   │ Weather Service    │
-└────────────────────┘   └───────────────────┘
+┌─────────────────────┐   ┌───────────────────┐
+│ Flight Plan Service │   │ Weather Service   │
+└─────────────────-───┘   └───────────────────┘
 
-┌────────────────────┐
+┌─────────────────────┐
 │ Dashboard (observer)│
-└────────────────────┘
+└─────────────────────┘
 ```
 
 ### Interaction Patterns
@@ -69,38 +69,20 @@ A simulated national air-traffic control system spanning multiple airports. Airc
 
 ## Quick Start (Connext DDS)
 
-### Prerequisites
-
-- RTI Connext DDS 7.7.0 Professional
-- Python 3.10+
-
-### Setup
-
 ```bash
 # Set up virtual environment and install dependencies
 source setup.sourceme
 
 # Generate Python types from IDL
-cd connext_dds/python
-./types_generate.sh
-cd ../..
-```
+cd connext_dds/python && ./types_generate.sh && cd ../..
 
-### Run the Demo
-
-```bash
-cd connext_dds/scripts
-./demo_start.sh all --duration 120
+# Run the demo (defaults to all apps, 120s)
+./connext_dds/scripts/demo_start.sh
 ```
 
 Open http://localhost:8050 for the real-time dashboard.
 
-```bash
-# Stop all apps
-./demo_stop.sh
-```
-
-See [`connext_dds/README.md`](connext_dds/README.md) for detailed instructions.
+See [`connext_dds/README.md`](connext_dds/README.md) for prerequisites, detailed options, and design notes.
 
 ## Repository Structure
 
@@ -126,7 +108,7 @@ See [`connext_dds/README.md`](connext_dds/README.md) for detailed instructions.
 
 ## How We Built This
 
-This project was designed iteratively using AI tools with and without [RTI's Connext MCP server](https://github.com/rticommunity/connext-mcp). The [`docs/design_process/`](docs/design_process/) directory documents this journey, including prompts, design iterations, and a comparison of MCP vs non-MCP approaches.
+This project was designed iteratively using AI tools with and without [RTI's Connext MCP server](https://chatbot.rti.com/docs/getting-started). The [`docs/design_process/`](docs/design_process/) directory documents this journey, including prompts, design iterations, and a comparison of MCP vs non-MCP approaches.
 
 ## License
 

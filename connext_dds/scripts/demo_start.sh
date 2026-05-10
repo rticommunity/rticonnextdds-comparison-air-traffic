@@ -292,7 +292,7 @@ start_all() {
 
 # ── Main dispatch ───────────────────────────────────────────────────────────
 
-CMD="${1:-help}"
+CMD="${1:-all}"
 shift || true
 
 case "$CMD" in

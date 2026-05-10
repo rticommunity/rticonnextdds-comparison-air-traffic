@@ -97,7 +97,6 @@ class AirplaneSimulator:
         self.heading = bearing_deg(self.lat, self.lon, dlat, dlon)
         self.ground_speed = 0.0
         self.vertical_speed = 0.0
-        self.fuel = 100.0
         self.phase = FlightPhase.PREFLIGHT
         self.assigned_runway: str | None = None
         self.assigned_gate: str | None = None
@@ -108,6 +107,13 @@ class AirplaneSimulator:
 
         # Distance tracking for descent planning
         self._total_route_nm = distance_nm(olat, olon, dlat, dlon)
+
+        # Fuel: load proportional to route distance so all flights land
+        # with ~15-20% reserve.  Burn rate is 0.001/tick; at cruise 450 kt
+        # that's ~0.04%/nm.  Initial fuel = estimated_burn + 20% reserve,
+        # clamped to [40, 100].
+        estimated_burn = self._total_route_nm * 0.04
+        self.fuel = min(100.0, max(40.0, estimated_burn + 20.0))
 
         # Weather deviation: when a HEADING instruction is received for
         # weather avoidance, hold heading indefinitely until Center issues
@@ -169,6 +175,16 @@ class AirplaneSimulator:
         self.wx_reader = dds.DataReader(
             self.subscriber, self.wx_cft,
             reader_qos(self.qos_provider, "WeatherReportProfile"),
+        )
+
+        # Gate assignment requester (created once, reused at parking time)
+        self.gate_requester = Requester(
+            request_type=GateRequest,
+            reply_type=GateAssignmentReply,
+            participant=self.participant,
+            service_name="GateAssignmentService",
+            datawriter_qos=writer_qos(self.qos_provider, "GateAssignmentRequestReplyProfile"),
+            datareader_qos=reader_qos(self.qos_provider, "GateAssignmentRequestReplyProfile"),
         )
 
         log.info(
@@ -263,18 +279,9 @@ class AirplaneSimulator:
             log.warning("Flight plan filing failed: %s", e)
 
     def request_gate(self):
-        """Request a gate assignment via Request/Reply."""
+        """Request a gate assignment via the pre-created Requester."""
         try:
-            requester = Requester(
-                request_type=GateRequest,
-                reply_type=GateAssignmentReply,
-                participant=self.participant,
-                service_name="GateAssignmentService",
-                datawriter_qos=writer_qos(self.qos_provider, "GateAssignmentRequestReplyProfile"),
-                datareader_qos=reader_qos(self.qos_provider, "GateAssignmentRequestReplyProfile"),
-            )
-
-            if not requester.wait_for_service(dds.Duration(seconds=5)):
+            if not self.gate_requester.wait_for_service(dds.Duration(seconds=5)):
                 log.warning("GateAssignmentService not available")
                 return
 
@@ -284,8 +291,8 @@ class AirplaneSimulator:
                 requested_timestamp=now_ms(),
                 requires_assignment=True,
             )
-            request_id = requester.send_request(request)
-            replies = requester.receive_replies(
+            request_id = self.gate_requester.send_request(request)
+            replies = self.gate_requester.receive_replies(
                 dds.Duration(seconds=10),
                 related_request_id=request_id,
             )
@@ -381,9 +388,9 @@ class AirplaneSimulator:
             self.lon += (nm_per_tick * math.sin(math.radians(self.heading))) / (60.0 * math.cos(math.radians(self.lat)))
 
         # Burn fuel (scaled by sim speed so consumption is consistent in sim-time)
-        # ~0.05%/nm at cruise (450 kt): lands with ~50% on a 1000 nm route
+        # ~0.005%/sim-sec at cruise: SFO-JFK (~5h) lands with ~10%, JFK-ORD (~1.6h) with ~71%
         if self.phase not in (FlightPhase.PREFLIGHT, FlightPhase.PARKED):
-            self.fuel = max(5.0, self.fuel - 0.0005 * speed)
+            self.fuel = max(5.0, self.fuel - 0.001 * speed)
 
     def publish_position(self):
         """Publish current aircraft position."""

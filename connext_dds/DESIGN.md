@@ -798,9 +798,9 @@ connext_dds/
 ## References
 
 - [RTI Connext Built-in QoS Profiles](https://community.rti.com/static/documentation/connext-dds/current/resource/xml/BuiltinProfiles.documentationONLY.xml)
-- [Content-Filtered Topics Guide](https://community.rti.com/static/documentation/connext-dds/7.6.0/doc/manuals/connext_dds_professional/getting_started_guide/csharp/intro_content_filters.html)
-- [Request-Reply Pattern](https://community.rti.com/static/documentation/connext-dds/7.6.0/doc/manuals/connext_dds_professional/users_manual/users_manual/The_Request_Reply_Pattern.htm)
-- [PARTITION QoS Policy](https://community.rti.com/static/documentation/connext-dds/7.6.0/doc/manuals/connext_dds_professional/users_manual/users_manual/PARTITION_QosPolicy.htm)
-- [XML Application Creation](https://community.rti.com/static/documentation/connext-dds/7.6.0/doc/api/connext_dds/api_python/xmlapp.html)
-- [Multi-Channel DataWriters](https://community.rti.com/static/documentation/connext-dds/7.6.0/doc/manuals/connext_dds_professional/users_manual/users_manual/MultichannelDatawriters.htm)
-- [Extensible Types Guide](https://community.rti.com/static/documentation/connext-dds/7.6.0/doc/manuals/connext_dds_professional/extensible_types_guide/extensible_types/Defining_Extensible_Types.htm)
+- [Content-Filtered Topics Guide](https://community.rti.com/static/documentation/connext-dds/7.7.0/doc/manuals/connext_dds_professional/getting_started_guide/csharp/intro_content_filters.html)
+- [Request-Reply Pattern](https://community.rti.com/static/documentation/connext-dds/7.7.0/doc/manuals/connext_dds_professional/users_manual/users_manual/The_Request_Reply_Pattern.htm)
+- [PARTITION QoS Policy](https://community.rti.com/static/documentation/connext-dds/7.7.0/doc/manuals/connext_dds_professional/users_manual/users_manual/PARTITION_QosPolicy.htm)
+- [XML Application Creation](https://community.rti.com/static/documentation/connext-dds/7.7.0/doc/api/connext_dds/api_python/xmlapp.html)
+- [Multi-Channel DataWriters](https://community.rti.com/static/documentation/connext-dds/7.7.0/doc/manuals/connext_dds_professional/users_manual/users_manual/MultichannelDatawriters.htm)
+- [Extensible Types Guide](https://community.rti.com/static/documentation/connext-dds/7.7.0/doc/manuals/connext_dds_professional/extensible_types_guide/extensible_types/Defining_Extensible_Types.htm)

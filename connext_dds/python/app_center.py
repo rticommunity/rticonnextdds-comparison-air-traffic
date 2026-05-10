@@ -310,8 +310,8 @@ class EnRouteCenter:
                                     tail, self.center_id, neighbor, time.time() - acq,
                                 )
                                 self._handoff_exiting_aircraft(sample)
-            elif inside and tail not in self.handed_off:
-                # Aircraft in our polygon but not handed off to us → alert
+            elif inside and tail not in self.controlled_aircraft and tail not in self.handed_off:
+                # Aircraft in our polygon that we're not tracking → alert
                 if tail not in self.alerted_uncoordinated:
                     self._alert_uncoordinated(sample)
 
