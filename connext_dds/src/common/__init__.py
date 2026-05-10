@@ -4,6 +4,7 @@ Common utilities for ATC DDS applications.
 
 import json
 import logging
+import math
 import os
 import time
 import uuid
@@ -41,12 +42,6 @@ def load_tracon_for_airport(config_path: str = SCENARIO_CONFIG) -> dict[str, str
     """Load mapping from airport code → TRACON id."""
     data = _load_scenario(config_path)
     return {a["code"]: a["serving_tracon"] for a in data["airports"] if "serving_tracon" in a}
-
-
-def load_tracon_serving_center(config_path: str = SCENARIO_CONFIG) -> dict[str, str]:
-    """Load mapping from TRACON id → serving center id."""
-    data = _load_scenario(config_path)
-    return {t["id"]: t["serving_center"] for t in data.get("tracons", []) if "serving_center" in t}
 
 
 # ── Per-entity config lookups ──────────────────────────────────────────
@@ -160,6 +155,24 @@ def find_center_for_position(
         if point_in_polygon(lat, lon, boundary):
             return cid
     return None
+
+
+def distance_nm(lat1, lon1, lat2, lon2) -> float:
+    """Great-circle distance in nautical miles (Haversine)."""
+    rlat1, rlat2 = math.radians(lat1), math.radians(lat2)
+    dlat = rlat2 - rlat1
+    dlon = math.radians(lon2 - lon1)
+    a = math.sin(dlat / 2) ** 2 + math.cos(rlat1) * math.cos(rlat2) * math.sin(dlon / 2) ** 2
+    return 2 * 3440.065 * math.asin(min(1.0, math.sqrt(a)))
+
+
+def bearing_deg(lat1, lon1, lat2, lon2) -> float:
+    """Initial bearing (degrees) from point 1 to point 2."""
+    rlat1, rlat2 = math.radians(lat1), math.radians(lat2)
+    dlon = math.radians(lon2 - lon1)
+    x = math.sin(dlon) * math.cos(rlat2)
+    y = math.cos(rlat1) * math.sin(rlat2) - math.sin(rlat1) * math.cos(rlat2) * math.cos(dlon)
+    return math.degrees(math.atan2(x, y)) % 360
 
 
 SIM_SPEED_PROP = "sim_speed"

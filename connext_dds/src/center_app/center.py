@@ -47,9 +47,11 @@ HandoffStatus = ATC.HandoffStatus
 InstructionType = ATC.InstructionType
 PilotAcknowledgment = ATC.PilotAcknowledgment
 from common import (
+    bearing_deg,
     create_participant,
     create_publisher,
     create_subscriber,
+    distance_nm,
     find_center_for_position,
     load_center_boundaries,
     load_center_config,
@@ -552,22 +554,6 @@ class EnRouteCenter:
     _WX_DEVIATION_COOLDOWN_S = 30
     _WX_THREAT_FACTOR = 1.5  # deviate if within 1.5× cell radius
 
-    @staticmethod
-    def _distance_nm(lat1, lon1, lat2, lon2) -> float:
-        rlat1, rlat2 = math.radians(lat1), math.radians(lat2)
-        dlat = rlat2 - rlat1
-        dlon = math.radians(lon2 - lon1)
-        a = math.sin(dlat / 2) ** 2 + math.cos(rlat1) * math.cos(rlat2) * math.sin(dlon / 2) ** 2
-        return 2 * 3440.065 * math.asin(min(1.0, math.sqrt(a)))
-
-    @staticmethod
-    def _bearing(lat1, lon1, lat2, lon2) -> float:
-        rlat1, rlat2 = math.radians(lat1), math.radians(lat2)
-        dlon = math.radians(lon2 - lon1)
-        x = math.sin(dlon) * math.cos(rlat2)
-        y = math.cos(rlat1) * math.sin(rlat2) - math.sin(rlat1) * math.cos(rlat2) * math.cos(dlon)
-        return math.degrees(math.atan2(x, y)) % 360
-
     def poll_weather_cells(self):
         """Read ConvectiveCell topic and maintain active-cells cache.
 
@@ -619,7 +605,7 @@ class EnRouteCenter:
                    pos.position.altitude_feet > cell.top_altitude_ft:
                     continue
 
-                dist = self._distance_nm(
+                dist = distance_nm(
                     pos.position.latitude, pos.position.longitude,
                     cell.center_latitude, cell.center_longitude,
                 )
@@ -627,7 +613,7 @@ class EnRouteCenter:
 
                 if dist < threat_radius:
                     # Compute deviation heading: perpendicular to bearing toward cell
-                    bearing_to_cell = self._bearing(
+                    bearing_to_cell = bearing_deg(
                         pos.position.latitude, pos.position.longitude,
                         cell.center_latitude, cell.center_longitude,
                     )
@@ -699,7 +685,7 @@ class EnRouteCenter:
                 if pos.position.altitude_feet < cell.base_altitude_ft or \
                    pos.position.altitude_feet > cell.top_altitude_ft:
                     continue
-                dist = self._distance_nm(
+                dist = distance_nm(
                     pos.position.latitude, pos.position.longitude,
                     cell.center_latitude, cell.center_longitude,
                 )
@@ -743,13 +729,13 @@ class EnRouteCenter:
         dest_wp = fp.waypoints[-1]
         dest_lat_v = dest_wp.position.latitude
         dest_lon_v = dest_wp.position.longitude
-        my_dist = self._distance_nm(
+        my_dist = distance_nm(
             pos.position.latitude, pos.position.longitude,
             dest_lat_v, dest_lon_v,
         )
 
         for wp in fp.waypoints:
-            wp_dist = self._distance_nm(
+            wp_dist = distance_nm(
                 wp.position.latitude, wp.position.longitude,
                 dest_lat_v, dest_lon_v,
             )

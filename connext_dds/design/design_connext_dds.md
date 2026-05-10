@@ -564,7 +564,7 @@ requester = Requester(
 │        │                                      │                           │
 │   ✈ airplane_app (N instances)                                            │
 │     Partitions: OPS/FPS/*, OPS/TERMINAL/*, OPS/ENROUTE/*,                 │
-│                 OPS/AIRPORT/<origin>, OPS/AIRPORT/<destination>            │
+│                 OPS/AIRPORT/<origin>, OPS/AIRPORT/<destination>           │
 │     Publishes: AircraftPosition (periodic 5Hz)                            │
 │     Subscribes: ControllerInstruction (CFT by tail_number)                │
 │     Request/Reply: FlightPlanFilingService, GateAssignmentService         │

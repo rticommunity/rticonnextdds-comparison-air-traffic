@@ -37,9 +37,11 @@ PilotAcknowledgment = ATC.PilotAcknowledgment
 Waypoint = ATC.Waypoint
 WeatherReport = ATC.WeatherReport
 from common import (
+    bearing_deg,
     create_participant,
     create_publisher,
     create_subscriber,
+    distance_nm,
     load_aircraft_config,
     load_airport_coords,
     load_qos_provider,
@@ -91,7 +93,7 @@ class AirplaneSimulator:
         self.lat = olat + random.uniform(-0.02, 0.02)
         self.lon = olon + random.uniform(-0.02, 0.02)
         self.alt = 0.0
-        self.heading = self._bearing(self.lat, self.lon, dlat, dlon)
+        self.heading = bearing_deg(self.lat, self.lon, dlat, dlon)
         self.ground_speed = 0.0
         self.vertical_speed = 0.0
         self.fuel = 100.0
@@ -103,7 +105,7 @@ class AirplaneSimulator:
         self.current_wp_index = 0  # index of next waypoint to fly to
 
         # Distance tracking for descent planning
-        self._total_route_nm = self._distance_nm(olat, olon, dlat, dlon)
+        self._total_route_nm = distance_nm(olat, olon, dlat, dlon)
 
         # Weather deviation: when a HEADING instruction is received for
         # weather avoidance, hold heading indefinitely until Center issues
@@ -176,31 +178,13 @@ class AirplaneSimulator:
     # ── Navigation helpers ──────────────────────────────────────────────
 
     @staticmethod
-    def _bearing(lat1, lon1, lat2, lon2):
-        """Initial bearing (degrees) from point 1 to point 2."""
-        rlat1, rlat2 = math.radians(lat1), math.radians(lat2)
-        dlon = math.radians(lon2 - lon1)
-        x = math.sin(dlon) * math.cos(rlat2)
-        y = math.cos(rlat1) * math.sin(rlat2) - math.sin(rlat1) * math.cos(rlat2) * math.cos(dlon)
-        return math.degrees(math.atan2(x, y)) % 360
-
-    @staticmethod
-    def _distance_nm(lat1, lon1, lat2, lon2):
-        """Great-circle distance in nautical miles."""
-        rlat1, rlat2 = math.radians(lat1), math.radians(lat2)
-        dlat = rlat2 - rlat1
-        dlon = math.radians(lon2 - lon1)
-        a = math.sin(dlat / 2) ** 2 + math.cos(rlat1) * math.cos(rlat2) * math.sin(dlon / 2) ** 2
-        return 2 * 3440.065 * math.asin(math.sqrt(a))  # Earth radius in nm
-
-    @staticmethod
     def _interpolate(lat1, lon1, lat2, lon2, frac):
         """Linearly interpolate between two points by fraction [0,1]."""
         return (lat1 + (lat2 - lat1) * frac, lon1 + (lon2 - lon1) * frac)
 
     def _build_waypoints(self, olat, olon, dlat, dlon):
         """Generate waypoints along the route: DEPART, intermediate points, ARRIVE."""
-        dist_nm = self._distance_nm(olat, olon, dlat, dlon)
+        dist_nm = distance_nm(olat, olon, dlat, dlon)
         # Short routes get fewer waypoints; long routes get more
         n_intermediate = max(1, min(6, int(dist_nm / 400)))
         wpts = [("DEPART", olat, olon, 0.0)]
@@ -220,13 +204,13 @@ class AirplaneSimulator:
         if self.current_wp_index >= len(self.waypoints):
             return
         _, wlat, wlon, _ = self.waypoints[self.current_wp_index]
-        dist = self._distance_nm(self.lat, self.lon, wlat, wlon)
+        dist = distance_nm(self.lat, self.lon, wlat, wlon)
         # Advance to next waypoint if we're within 5nm
         if dist < 5.0 and self.current_wp_index < len(self.waypoints) - 1:
             self.current_wp_index += 1
             _, wlat, wlon, _ = self.waypoints[self.current_wp_index]
             log.info("Passing waypoint → next: %s", self.waypoints[self.current_wp_index][0])
-        self.heading = self._bearing(self.lat, self.lon, wlat, wlon)
+        self.heading = bearing_deg(self.lat, self.lon, wlat, wlon)
 
     # ── Flight plan filing ──────────────────────────────────────────────
 
@@ -316,7 +300,7 @@ class AirplaneSimulator:
     def _dist_to_destination(self):
         """Distance in nm from current position to destination airport."""
         dlat, dlon = AIRPORT_COORDS.get(self.destination, (33.9425, -118.4081))
-        return self._distance_nm(self.lat, self.lon, dlat, dlon)
+        return distance_nm(self.lat, self.lon, dlat, dlon)
 
     def advance_simulation(self):
         """Advance aircraft position and state by one tick."""
