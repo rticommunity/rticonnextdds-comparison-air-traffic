@@ -1,0 +1,30 @@
+sequenceDiagram
+    autonumber
+
+    participant A as ✈ Aircraft
+    participant IC as Initiating Controller<br/>(e.g., TRACON N90)
+    participant RC as Receiving Controller<br/>(e.g., Center ZNY)
+    participant Readers as All AircraftTracking<br/>Readers (Dashboard, etc.)
+
+    Note over A,Readers: Aircraft is controlled by Initiating Controller
+
+    A ->> IC: AircraftPosition (periodic 5 Hz, via CFT)
+    A ->> RC: AircraftPosition (periodic 5 Hz, via CFT)
+    IC ->> Readers: AircraftTracking [controller = IC]
+
+    Note over IC: Trigger condition met<br/>(altitude/polygon exit)
+
+    rect rgb(255, 248, 225)
+        Note over IC,RC: Handoff Protocol (two-step)
+        IC ->> RC: Handoff [status = INITIATED]<br/>(CFT: to/from_controller_id)
+
+        RC ->> IC: Handoff [status = ACCEPTED]<br/>(CFT: to/from_controller_id)
+
+        RC ->> Readers: AircraftTracking [controller = RC]<br/>(SHARED_OWNERSHIP, newer timestamp wins)
+
+        Note over IC: unregister_instance(AircraftTracking)<br/>Removes aircraft from local tracking
+    end
+
+    Note over A,Readers: Aircraft is now controlled by Receiving Controller
+
+    Note over A: Aircraft is passive —<br/>no Handoff subscription.<br/>Responds only to<br/>ControllerInstruction.

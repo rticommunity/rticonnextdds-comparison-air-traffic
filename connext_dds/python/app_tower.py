@@ -14,7 +14,7 @@ import time
 
 
 import rti.connextdds as dds
-from air_traffic import NationalAirTrafficControl as ATC
+from air_traffic_types import NationalAirTrafficControl as ATC
 
 AircraftPosition = ATC.AircraftPosition
 AircraftTracking = ATC.AircraftTracking
@@ -262,7 +262,7 @@ class TowerController:
                 self._publish_tracking(tail)
 
         if self.tracked_aircraft:
-            log.info("Tracking %d aircraft", len(self.tracked_aircraft))
+            log.debug("Tracking %d aircraft", len(self.tracked_aircraft))
 
         # Issue approach clearances to arriving aircraft below 3000 ft
         for ac_id, pos in self.tracked_aircraft.items():
@@ -302,7 +302,7 @@ class TowerController:
     def process_acknowledgments(self):
         """Read pilot acknowledgments."""
         for sample in self.ack_reader.take_data():
-            log.info(
+            log.debug(
                 "ACK from %s: %s for instruction %s",
                 sample.tail_number,
                 sample.status.name,
@@ -433,6 +433,9 @@ def main():
 
     cfg = load_airport_config(args.airport_code, args.config)
     controller_id = args.controller_id or f"TWR-{args.airport_code}"
+
+    global log
+    log = setup_logging(controller_id)
     serving_tracon = args.serving_tracon if args.serving_tracon is not None else cfg.get("serving_tracon", "")
 
     tower = TowerController(

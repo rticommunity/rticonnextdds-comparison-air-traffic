@@ -16,7 +16,7 @@ import time
 
 import rti.connextdds as dds
 from rti.rpc import Requester
-from air_traffic import NationalAirTrafficControl as ATC
+from air_traffic_types import NationalAirTrafficControl as ATC
 
 AircraftPosition = ATC.AircraftPosition
 AcknowledgmentStatus = ATC.AcknowledgmentStatus
@@ -100,6 +100,7 @@ class AirplaneSimulator:
         self.fuel = 100.0
         self.phase = FlightPhase.PREFLIGHT
         self.assigned_runway: str | None = None
+        self.assigned_gate: str | None = None
 
         # Build waypoint list along the route
         self.waypoints = self._build_waypoints(olat, olon, dlat, dlon)
@@ -292,6 +293,7 @@ class AirplaneSimulator:
             for reply, info in replies:
                 if info.valid:
                     a = reply.assignment
+                    self.assigned_gate = a.gate_name or None
                     log.info("Gate assignment: %s at %s (%s)",
                              a.gate_name, self.destination, a.status.name)
 
@@ -368,6 +370,8 @@ class AirplaneSimulator:
             dlat, dlon = AIRPORT_COORDS.get(self.destination, (self.lat, self.lon))
             self.lat, self.lon = dlat, dlon
             self.phase = FlightPhase.PARKED
+            self.ground_speed = 0.0
+            self.vertical_speed = 0.0
 
         # Advance position based on heading
         if self.ground_speed > 0 and self.phase not in (FlightPhase.PARKED,):
@@ -376,8 +380,10 @@ class AirplaneSimulator:
             self.lat += (nm_per_tick * math.cos(math.radians(self.heading))) / 60.0
             self.lon += (nm_per_tick * math.sin(math.radians(self.heading))) / (60.0 * math.cos(math.radians(self.lat)))
 
-        # Burn fuel
-        self.fuel = max(0.0, self.fuel - 0.002)
+        # Burn fuel (scaled by sim speed so consumption is consistent in sim-time)
+        # ~0.05%/nm at cruise (450 kt): lands with ~50% on a 1000 nm route
+        if self.phase not in (FlightPhase.PREFLIGHT, FlightPhase.PARKED):
+            self.fuel = max(5.0, self.fuel - 0.0005 * speed)
 
     def publish_position(self):
         """Publish current aircraft position."""
@@ -394,6 +400,7 @@ class AirplaneSimulator:
             fuel_level_percent=self.fuel,
             nav_status=NavStatus.WEATHER_DEVIATION if self._wx_deviating else NavStatus.NORMAL,
             assigned_runway=self.assigned_runway,
+            assigned_gate=self.assigned_gate,
             timestamp=now_ms(),
         )
         self.pos_writer.write(sample)
@@ -401,7 +408,7 @@ class AirplaneSimulator:
     def process_instructions(self):
         """Read and acknowledge any pending controller instructions."""
         for sample in self.instr_reader.take_data():
-            log.info(
+            log.debug(
                 "Instruction from %s: %s %s",
                 sample.controller_id,
                 sample.instruction_type.name,
@@ -485,13 +492,12 @@ class AirplaneSimulator:
             self.advance_simulation()
             self.publish_position()
             self.process_instructions()
-
-            if tick % 50 == 0:  # Every ~10 seconds
-                self.check_weather()
+            self.check_weather()
 
             if self.phase == FlightPhase.PARKED:
                 log.info("Aircraft parked, requesting gate")
                 self.request_gate()
+                self.publish_position()  # re-publish with assigned_gate
                 break
 
             tick += 1
@@ -527,6 +533,9 @@ def main():
 
     cfg = load_aircraft_config(args.callsign, args.config)
     tail = args.tail_number or (cfg.get("tail_number") if cfg else None) or _random_tail_number()
+
+    global log
+    log = setup_logging(tail)
     origin = args.origin or (cfg.get("origin") if cfg else None) or "KJFK"
     destination = args.destination or (cfg.get("destination") if cfg else None) or "KLAX"
 

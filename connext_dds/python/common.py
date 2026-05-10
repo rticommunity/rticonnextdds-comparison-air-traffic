@@ -240,12 +240,23 @@ def make_id(prefix: str = "") -> str:
 
 
 def setup_logging(name: str) -> logging.Logger:
-    logging.basicConfig(
-        level=logging.INFO,
-        format=f"%(asctime)s [{name}] %(levelname)s: %(message)s",
-        datefmt="%H:%M:%S",
-    )
-    return logging.getLogger(name)
+    """Configure logging with *name* in the format string.
+
+    Can be called again with a more specific name (e.g. ``"center"`` →
+    ``"CTR-ZNY"``) — the root handler's formatter is replaced so that all
+    subsequent log output uses the new tag.
+    """
+    fmt = f"%(asctime)s [{name}] %(levelname)s: %(message)s"
+    datefmt = "%H:%M:%S"
+    root = logging.getLogger()
+    if not root.handlers:
+        logging.basicConfig(level=logging.INFO, format=fmt, datefmt=datefmt)
+    else:
+        for h in root.handlers:
+            h.setFormatter(logging.Formatter(fmt, datefmt=datefmt))
+    logger = logging.getLogger(name)
+    logger.setLevel(logging.INFO)
+    return logger
 
 
 def load_qos_provider(qos_file: str | None = None) -> dds.QosProvider:
@@ -306,3 +317,61 @@ def writer_qos(qos_provider: dds.QosProvider, profile: str) -> dds.DataWriterQos
 
 def reader_qos(qos_provider: dds.QosProvider, profile: str) -> dds.DataReaderQos:
     return qos_provider.datareader_qos_from_profile(f"{QOS_LIB}::{profile}")
+
+
+# ── Sim-speed QoS scaling ──────────────────────────────────────────────
+#
+# The XML profiles define QoS time values for real-time (speed = 1).
+# For accelerated simulations the wall-clock periods must shrink
+# proportionally so that DDS deadlines, liveliness checks, etc.
+# remain meaningful.
+#
+
+
+def _scale_duration(dur: dds.Duration, factor: float) -> dds.Duration:
+    """Divide a Duration by *factor*; INFINITE and zero are returned as-is."""
+    if dur == dds.Duration.infinite or dur == dds.Duration.zero:
+        return dur
+    return dds.Duration.from_seconds(dur.to_seconds() / factor)
+
+
+def writer_qos_for_speed(
+    qos_provider: dds.QosProvider, profile: str, sim_speed: float,
+) -> dds.DataWriterQos:
+    """Load writer QoS from *profile* and scale time policies by *sim_speed*.
+
+    Divides deadline, liveliness, latency-budget, and lifespan durations
+    so wall-clock periods remain correct at higher sim speeds.
+    """
+    qos = writer_qos(qos_provider, profile)
+    if sim_speed <= 1.0:
+        return qos
+    qos.deadline.period = _scale_duration(qos.deadline.period, sim_speed)
+    qos.liveliness.lease_duration = _scale_duration(
+        qos.liveliness.lease_duration, sim_speed,
+    )
+    qos.latency_budget.duration = _scale_duration(
+        qos.latency_budget.duration, sim_speed,
+    )
+    qos.lifespan.duration = _scale_duration(qos.lifespan.duration, sim_speed)
+    return qos
+
+
+def reader_qos_for_speed(
+    qos_provider: dds.QosProvider, profile: str, sim_speed: float,
+) -> dds.DataReaderQos:
+    """Load reader QoS from *profile* and scale time policies by *sim_speed*."""
+    qos = reader_qos(qos_provider, profile)
+    if sim_speed <= 1.0:
+        return qos
+    qos.deadline.period = _scale_duration(qos.deadline.period, sim_speed)
+    qos.liveliness.lease_duration = _scale_duration(
+        qos.liveliness.lease_duration, sim_speed,
+    )
+    qos.latency_budget.duration = _scale_duration(
+        qos.latency_budget.duration, sim_speed,
+    )
+    qos.time_based_filter.minimum_separation = _scale_duration(
+        qos.time_based_filter.minimum_separation, sim_speed,
+    )
+    return qos

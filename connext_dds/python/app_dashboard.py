@@ -24,7 +24,7 @@ from collections import defaultdict, deque
 from flask import Flask, Response, render_template_string, request
 
 import rti.connextdds as dds
-from air_traffic import NationalAirTrafficControl as ATC
+from air_traffic_types import NationalAirTrafficControl as ATC
 
 AircraftPosition = ATC.AircraftPosition
 Alert = ATC.Alert
@@ -142,6 +142,7 @@ def position_dict(s):
         "origin": s.origin_airport, "dest": s.destination_airport,
         "fuel_pct": int(s.fuel_level_percent),
         "nav_status": s.nav_status.name if s.nav_status is not None else "NORMAL",
+        "gate": s.assigned_gate or "",
     }
 
 def weather_dict(s):
@@ -816,7 +817,7 @@ tr.selected td { background: rgba(78,168,222,0.18); }
   </div>
   <div class="speed-control">
     <label for="speed-slider">Speed</label>
-    <input type="range" id="speed-slider" min="0.1" max="20" step="0.1" value="1">
+    <input type="range" id="speed-slider" min="0.1" max="50" step="0.1" value="1">
     <span id="speed-value">1x</span>
   </div>
 </div>
@@ -1318,7 +1319,7 @@ function renderAircraft(positions, trails, tracking) {
     var ctrlLine = trk ? "<br><strong style='color:" + color + "'>" + trk.controller_id + "</strong> (" + trk.facility_type + ")" : "";
     aircraftMarkers[ac.tail_number].getPopup().setContent(
       "<strong>" + ac.callsign + "</strong> (" + ac.tail_number + ")<br>" +
-      '<span class="phase phase-' + ac.phase + '">' + ac.phase + "</span>" + (ac.nav_status === 'WEATHER_DEVIATION' ? ' <span class="nav-wx">⚡WX DEV</span>' : '') + ctrlLine + "<br>" +
+      '<span class="phase phase-' + ac.phase + '">' + ac.phase + "</span>" + (ac.gate ? ' Gate ' + ac.gate : '') + (ac.nav_status === 'WEATHER_DEVIATION' ? ' <span class="nav-wx">⚡WX DEV</span>' : '') + ctrlLine + "<br>" +
       "Alt: " + ac.alt_ft.toLocaleString() + " ft &bull; " + ac.speed_kt + " kt<br>" +
       "Hdg: " + ac.heading + "&deg; &bull; Fuel: " + ac.fuel_pct + "%<br>" +
       ac.origin + " &rarr; " + ac.dest
@@ -1445,7 +1446,7 @@ function update(d) {
     var sel = ac.tail_number === selectedAircraftId ? ' class="selected"' : '';
     return '<tr' + sel + ' onclick="selectAircraft(\'' + ac.tail_number + '\')"><td>' + ac.callsign + "</td>" +
            "<td>" + ac.tail_number + "</td>" +
-           '<td><span class="phase phase-' + ac.phase + '">' + ac.phase + "</span>" + (ac.nav_status === 'WEATHER_DEVIATION' ? ' <span class="nav-wx">⚡WX</span>' : '') + "</td>" +
+           '<td><span class="phase phase-' + ac.phase + '">' + ac.phase + "</span>" + (ac.gate ? ' ' + ac.gate : '') + (ac.nav_status === 'WEATHER_DEVIATION' ? ' <span class="nav-wx">⚡WX</span>' : '') + "</td>" +
            "<td>" + ac.alt_ft.toLocaleString() + "</td>" +
            "<td>" + ac.speed_kt + "</td>" +
            "<td>" + ac.fuel_pct + "%</td>" +

@@ -196,6 +196,7 @@ module NationalAirTrafficControl {
         AirportCode destination_airport;
         float fuel_level_percent;
         @optional RunwayId assigned_runway;
+        @optional string<16> assigned_gate;
         @optional NavStatus nav_status;
         Timestamp timestamp;
     };

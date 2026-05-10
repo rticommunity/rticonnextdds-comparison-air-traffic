@@ -18,7 +18,7 @@ import time
 
 
 import rti.connextdds as dds
-from air_traffic import NationalAirTrafficControl as ATC
+from air_traffic_types import NationalAirTrafficControl as ATC
 
 AircraftPosition = ATC.AircraftPosition
 AircraftTracking = ATC.AircraftTracking
@@ -44,6 +44,7 @@ from common import (
     load_tracon_config,
     make_id,
     now_ms,
+    read_sim_speed_from_discovery,
     reader_qos,
     setup_logging,
     writer_qos,
@@ -85,17 +86,20 @@ class TraconController:
         controller_id: str,
         airport_codes: list[str],
         serving_center: str = "",
+        config_path: str = "",
     ):
         self.tracon_id = tracon_id
         self.controller_id = controller_id
         self.airport_codes = airport_codes
         self.serving_center = serving_center
+        self.config_path = config_path
         self.tracked_aircraft: dict[str, AircraftPosition] = {}
         self.handed_off: set[str] = set()  # tail numbers already handed off this cycle
         self.acquired_aircraft: set[str] = set()  # aircraft formally received via handoff
         self.controlling: set[str] = set()  # tails with active AircraftTracking instance
         self.pending_handoffs: dict[str, str] = {}  # tail → handoff_id awaiting ACCEPTED
         self._sep_cooldown: dict[tuple[str, str], float] = {}  # (tail_a, tail_b) -> last alert time
+        self._last_speed_issued: dict[str, float] = {}  # tail → last speed target issued
 
         # DDS setup
         self.qos_provider = load_qos_provider()
@@ -237,7 +241,7 @@ class TraconController:
         if self.tracked_aircraft:
             arrivals = sum(1 for p in self.tracked_aircraft.values() if self._is_arriving(p))
             departures = sum(1 for p in self.tracked_aircraft.values() if self._is_departing(p))
-            log.info(
+            log.debug(
                 "Tracking %d aircraft in terminal area (%d arr, %d dep)",
                 len(self.tracked_aircraft), arrivals, departures,
             )
@@ -270,7 +274,8 @@ class TraconController:
                 # 3 nm lateral ≈ 0.05°, 1000 ft vertical
                 if lat_diff < 0.05 and lon_diff < 0.05 and alt_diff < 1000:
                     pair = tuple(sorted((a.tail_number, b.tail_number)))
-                    if now - self._sep_cooldown.get(pair, 0) < self._SEP_COOLDOWN_S:
+                    cooldown = self._SEP_COOLDOWN_S / max(self._sim_speed, 0.1)
+                    if now - self._sep_cooldown.get(pair, 0) < cooldown:
                         continue
                     self._sep_cooldown[pair] = now
                     log.warning(
@@ -302,16 +307,18 @@ class TraconController:
             alt = pos.position.altitude_feet
 
             # Issue descent instructions to step aircraft down
+            target_speed = None
             if 10000 < alt < 15000 and pos.ground_speed_knots > 280:
-                self.issue_instruction(
-                    tail, InstructionType.SPEED,
-                    speed=250.0,
-                )
+                target_speed = 250.0
             elif 5000 < alt <= 10000 and pos.ground_speed_knots > 220:
+                target_speed = 210.0
+
+            if target_speed is not None and self._last_speed_issued.get(tail) != target_speed:
                 self.issue_instruction(
                     tail, InstructionType.SPEED,
-                    speed=210.0,
+                    speed=target_speed,
                 )
+                self._last_speed_issued[tail] = target_speed
 
     # ── Handoff management ─────────────────────────────────────────────
 
@@ -477,11 +484,11 @@ class TraconController:
             issued_at=now_ms(),
         )
         self.instr_writer.write(instr)
-        log.info("Issued %s to %s", instr_type.name, tail_number)
+        log.debug("Issued %s to %s", instr_type.name, tail_number)
 
     def process_acknowledgments(self):
         for sample in self.ack_reader.take_data():
-            log.info("ACK from %s: %s", sample.tail_number, sample.status.name)
+            log.debug("ACK from %s: %s", sample.tail_number, sample.status.name)
 
     # ── Main loop ──────────────────────────────────────────────────────
 
@@ -490,8 +497,12 @@ class TraconController:
         log.info("TRACON %s operational — serving %s",
                  self.tracon_id, ", ".join(self.airport_codes))
         start = time.time()
+        self._sim_speed = 1.0
 
         while not shutdown_flag and (time.time() - start) < duration_s:
+            self._sim_speed = read_sim_speed_from_discovery(
+                self.participant, self.config_path,
+            )
             self.monitor_traffic()
             self.check_separation()
             self.sequence_arrivals()
@@ -522,11 +533,15 @@ def main():
     cfg = load_tracon_config(args.tracon_id, args.config)
     controller_id = args.controller_id or f"APP-{args.tracon_id}"
 
+    global log
+    log = setup_logging(controller_id)
+
     tracon = TraconController(
         tracon_id=args.tracon_id,
         controller_id=controller_id,
         airport_codes=args.airports or cfg.get("airports", []),
         serving_center=args.serving_center if args.serving_center is not None else cfg.get("serving_center", ""),
+        config_path=args.config,
     )
     tracon.run(duration_s=args.duration)
 

@@ -13,7 +13,7 @@ import time
 
 import rti.connextdds as dds
 from rti.rpc import Replier
-from air_traffic import NationalAirTrafficControl as ATC
+from air_traffic_types import NationalAirTrafficControl as ATC
 
 GateAssignment = ATC.GateAssignment
 GateAssignmentReply = ATC.GateAssignmentReply
@@ -31,9 +31,11 @@ from common import (
     load_airport_config,
     load_qos_provider,
     now_ms,
+    read_sim_speed_from_discovery,
     reader_qos,
     setup_logging,
     writer_qos,
+    writer_qos_for_speed,
 )
 import common
 
@@ -56,9 +58,12 @@ class AirportInfrastructure:
 
     GATE_NAMES = [f"{t}{n}" for t in ("A", "B", "C") for n in range(1, 11)]
 
-    def __init__(self, airport_code: str, runways: list[str], serving_tracon: str = ""):
+    def __init__(self, airport_code: str, runways: list[str], serving_tracon: str = "",
+                 config_path: str = "", weather_interval_s: float = 1800.0):
         self.airport_code = airport_code
         self.runways = runways
+        self.config_path = config_path
+        self.weather_interval_s = weather_interval_s
         self.assigned_gates: dict[str, str] = {}  # flight_id -> gate
 
         # DDS setup
@@ -76,12 +81,14 @@ class AirportInfrastructure:
         self.publisher = create_publisher(self.participant)
         self.subscriber = create_subscriber(self.participant)
 
-        # WeatherReport writer
+        # WeatherReport writer — QoS scaled for current sim speed
         wx_topic = dds.Topic(self.participant, "WeatherReport", WeatherReport)
+        speed = read_sim_speed_from_discovery(self.participant, self.config_path)
         self.wx_writer = dds.DataWriter(
             self.publisher, wx_topic,
-            writer_qos(self.qos_provider, "WeatherReportProfile"),
+            writer_qos_for_speed(self.qos_provider, "WeatherReportProfile", speed),
         )
+        self._last_qos_speed = speed
 
         # RunwayStatus writer
         rwy_topic = dds.Topic(self.participant, "RunwayStatus", RunwayStatus)
@@ -189,7 +196,7 @@ class AirportInfrastructure:
 
             self.gate_replier.send_reply(reply, info)
 
-    def run(self, duration_s: float = 120.0, weather_interval_s: float = 25.0):
+    def run(self, duration_s: float = 120.0):
         """Main loop: publish weather periodically, respond to gate requests."""
         log.info("Airport %s operational", self.airport_code)
         start = time.time()
@@ -201,8 +208,16 @@ class AirportInfrastructure:
         while not shutdown_flag and (time.time() - start) < duration_s:
             now = time.time()
 
-            # Publish weather at configured interval (≤30s per QoS deadline)
-            if now - last_wx >= weather_interval_s:
+            # Scale interval by sim speed so weather cadence tracks sim-time
+            speed = read_sim_speed_from_discovery(self.participant, self.config_path)
+            wall_interval = self.weather_interval_s / max(speed, 0.1)
+            if speed != self._last_qos_speed:
+                self._last_qos_speed = speed
+                self.wx_writer.qos = writer_qos_for_speed(
+                    self.qos_provider, "WeatherReportProfile", speed,
+                )
+                log.info("Weather QoS rescaled for speed=%.1fx", speed)
+            if now - last_wx >= wall_interval:
                 self.publish_weather()
                 last_wx = now
 
@@ -220,18 +235,24 @@ def main():
     parser.add_argument("--runways", nargs="+", default=None, help="Runway IDs (default: from config)")
     parser.add_argument("--serving-tracon", default=None, help="Serving TRACON (default: from config)")
     parser.add_argument("--duration", type=float, default=120.0, help="Duration in seconds")
-    parser.add_argument("--wx-interval", type=float, default=25.0, help="Weather report interval (s)")
+    parser.add_argument("--wx-interval", type=float, default=1800.0,
+                        help="Weather report interval in sim-time seconds (default: 1800 = 30 min)")
     args = parser.parse_args()
 
     common.QOS_FILE = args.qos_file
+
+    global log
+    log = setup_logging(args.airport_code)
 
     cfg = load_airport_config(args.airport_code, args.config)
     airport = AirportInfrastructure(
         airport_code=args.airport_code,
         runways=args.runways or cfg["runways"],
         serving_tracon=args.serving_tracon if args.serving_tracon is not None else cfg.get("serving_tracon", ""),
+        config_path=args.config,
+        weather_interval_s=args.wx_interval,
     )
-    airport.run(duration_s=args.duration, weather_interval_s=args.wx_interval)
+    airport.run(duration_s=args.duration)
 
 
 if __name__ == "__main__":

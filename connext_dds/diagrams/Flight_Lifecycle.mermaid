@@ -1,0 +1,14 @@
+flowchart TD
+    GROUND[Ground: PREFLIGHT · TAXI_OUT · TAKEOFF] --> CLIMB
+    CLIMB -->|"≥1500 ft · Tower→TRACON"| TERMINAL_DEP[Terminal Departure: CLIMB]
+    TERMINAL_DEP -->|"≥17000 ft · TRACON→Center"| ENROUTE[En-Route: CRUISE · DESCENT]
+    ENROUTE -->|"polygon exit · Center→Center"| ENROUTE
+    ENROUTE -->|"<20000 ft · Center→TRACON"| TERMINAL_ARR[Terminal Arrival: APPROACH]
+    TERMINAL_ARR -->|"≤3000 ft · TRACON→Tower"| LANDING[Ground: LANDING · TAXI_IN · PARKED]
+
+    style GROUND fill:#e3f2fd,stroke:#1565c0
+    style CLIMB fill:#e3f2fd,stroke:#1565c0
+    style TERMINAL_DEP fill:#e8f5e9,stroke:#2e7d32
+    style ENROUTE fill:#fff8e1,stroke:#f9a825
+    style TERMINAL_ARR fill:#e8f5e9,stroke:#2e7d32
+    style LANDING fill:#e3f2fd,stroke:#1565c0

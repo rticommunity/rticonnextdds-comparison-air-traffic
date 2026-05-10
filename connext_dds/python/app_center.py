@@ -27,7 +27,7 @@ import time
 
 
 import rti.connextdds as dds
-from air_traffic import NationalAirTrafficControl as ATC
+from air_traffic_types import NationalAirTrafficControl as ATC
 
 AircraftPosition = ATC.AircraftPosition
 AircraftTracking = ATC.AircraftTracking
@@ -61,6 +61,7 @@ from common import (
     now_ms,
     point_in_polygon,
     polygon_bbox,
+    read_sim_speed_from_discovery,
     reader_qos,
     setup_logging,
     writer_qos,
@@ -98,9 +99,11 @@ class EnRouteCenter:
         tracon_for_airport: dict[str, str],
         min_altitude_ft: int = 18000,
         max_altitude_ft: int = 60000,
+        config_path: str = "",
     ):
         self.center_id = center_id
         self.controller_id = controller_id
+        self.config_path = config_path
         self.min_alt = min_altitude_ft
         self.max_alt = max_altitude_ft
         self.boundary = boundary
@@ -251,7 +254,6 @@ class EnRouteCenter:
         self._wx_deviating: set[str] = set()
         # Cached flight plans by tail_number for waypoint lookup
         self._flight_plans: dict[str, FlightPlan] = {}
-        _WX_DEVIATION_COOLDOWN_S = 30  # seconds between repeated deviations per aircraft
 
         log.info(
             "Center %s (%s) initialized — FL%d-FL%d, boundary=%d vertices, "
@@ -296,7 +298,8 @@ class EnRouteCenter:
                         # Never entered our polygon — after grace period, check
                         # if it's actually in another center and forward it
                         acq = self.acquired_at.get(tail, time.time())
-                        if (time.time() - acq) > self.NEVER_ENTERED_GRACE_S:
+                        grace = self.NEVER_ENTERED_GRACE_S / max(self._sim_speed, 0.1)
+                        if (time.time() - acq) > grace:
                             neighbor = find_center_for_position(
                                 sample.position.latitude, sample.position.longitude,
                                 self.all_boundaries, exclude=self.center_id,
@@ -343,7 +346,7 @@ class EnRouteCenter:
                     self._handoff_exiting_aircraft(last_pos)
 
         if self.controlled_aircraft:
-            log.info(
+            log.debug(
                 "Center %s: controlling %d aircraft",
                 self.center_id, len(self.controlled_aircraft),
             )
@@ -375,7 +378,8 @@ class EnRouteCenter:
                 # Simplified separation check (5nm lateral ≈ 0.083°, 1000ft vertical)
                 if lat_diff < 0.083 and lon_diff < 0.083 and alt_diff < 1000:
                     pair = tuple(sorted((a.tail_number, b.tail_number)))
-                    if now - self._sep_cooldown.get(pair, 0) < self._SEP_COOLDOWN_S:
+                    cooldown = self._SEP_COOLDOWN_S / max(self._sim_speed, 0.1)
+                    if now - self._sep_cooldown.get(pair, 0) < cooldown:
                         continue
                     self._sep_cooldown[pair] = now
                     log.warning(
@@ -649,7 +653,8 @@ class EnRouteCenter:
             if tail in self._wx_deviating:
                 continue
             # Check cooldown
-            if now - self._wx_deviation_cooldown.get(tail, 0) < self._WX_DEVIATION_COOLDOWN_S:
+            wx_cooldown = self._WX_DEVIATION_COOLDOWN_S / max(self._sim_speed, 0.1)
+            if now - self._wx_deviation_cooldown.get(tail, 0) < wx_cooldown:
                 continue
 
             for cell in self._active_cells.values():
@@ -802,14 +807,18 @@ class EnRouteCenter:
 
     def process_acknowledgments(self):
         for sample in self.ack_reader.take_data():
-            log.info("ACK from %s: %s", sample.tail_number, sample.status.name)
+            log.debug("ACK from %s: %s", sample.tail_number, sample.status.name)
 
     def run(self, duration_s: float = 120.0):
         """Main center control loop at ~1 Hz."""
         log.info("En-route center %s operational", self.center_id)
         start = time.time()
+        self._sim_speed = 1.0
 
         while not shutdown_flag and (time.time() - start) < duration_s:
+            self._sim_speed = read_sim_speed_from_discovery(
+                self.participant, self.config_path,
+            )
             self.process_handoffs()
             self.monitor_traffic()
             self.check_separation()
@@ -841,6 +850,9 @@ def main():
 
     cfg = load_center_config(args.center_id, args.config)
     controller_id = args.controller_id or f"CTR-{args.center_id}"
+
+    global log
+    log = setup_logging(controller_id)
     min_alt = args.min_alt if args.min_alt is not None else cfg.get("min_altitude_ft", 18000)
     max_alt = args.max_alt if args.max_alt is not None else cfg.get("max_altitude_ft", 60000)
 
@@ -854,6 +866,7 @@ def main():
         tracon_for_airport=load_tracon_for_airport(args.config),
         min_altitude_ft=min_alt,
         max_altitude_ft=max_alt,
+        config_path=args.config,
     )
     center.run(duration_s=args.duration)
 

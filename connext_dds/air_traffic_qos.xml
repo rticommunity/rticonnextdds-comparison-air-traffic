@@ -363,26 +363,20 @@
             </datareader_qos>
         </qos_profile>
 
-        <!-- Topic: WeatherReport — state data + 30s deadline -->
+        <!-- Topic: WeatherReport — state data, 30-min sim-time cadence.
+             Deadline = 2700s (1.5× publication interval at speed=1).
+             Scaled at runtime by writer_qos_for_speed(). -->
         <qos_profile name="WeatherReportProfile"
                      base_name="AirTrafficControl_QosLib::StateDataProfile"
                      is_default_qos="false">
             <datawriter_qos>
                 <deadline>
                     <period>
-                        <sec>30</sec>
+                        <sec>2700</sec>
                         <nanosec>0</nanosec>
                     </period>
                 </deadline>
             </datawriter_qos>
-            <datareader_qos>
-                <deadline>
-                    <period>
-                        <sec>30</sec>
-                        <nanosec>0</nanosec>
-                    </period>
-                </deadline>
-            </datareader_qos>
         </qos_profile>
 
         <!-- Topic: RunwayStatus — plain state data -->
@@ -451,26 +445,20 @@
             </datareader_qos>
         </qos_profile>
 
-        <!-- Topic: ConvectiveCell — state data + 15s deadline (cells update ~10s) -->
+        <!-- Topic: ConvectiveCell — state data, 5-min sim-time cadence.
+             Deadline = 450s (1.5× publication interval at speed=1).
+             Scaled at runtime by writer_qos_for_speed(). -->
         <qos_profile name="ConvectiveCellProfile"
                      base_name="AirTrafficControl_QosLib::StateDataProfile"
                      is_default_qos="false">
             <datawriter_qos>
                 <deadline>
                     <period>
-                        <sec>15</sec>
+                        <sec>450</sec>
                         <nanosec>0</nanosec>
                     </period>
                 </deadline>
             </datawriter_qos>
-            <datareader_qos>
-                <deadline>
-                    <period>
-                        <sec>15</sec>
-                        <nanosec>0</nanosec>
-                    </period>
-                </deadline>
-            </datareader_qos>
         </qos_profile>
 
     </qos_library>

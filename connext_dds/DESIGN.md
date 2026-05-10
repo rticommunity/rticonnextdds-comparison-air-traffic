@@ -220,15 +220,39 @@ Each topic maps 1:1 to a profile. App code references these names directly.
 | `ControllerInstructionProfile` | `ReliableCommandProfile` | ControllerInstruction | — |
 | `PilotAcknowledgmentProfile` | `ReliableCommandProfile` | PilotAcknowledgment | — |
 | `AlertProfile` | `BuiltinQosLib::Pattern.Event` | Alert | Reliable, keep-all, transient-local, lifespan 60s, priority 10 |
-| `WeatherReportProfile` | `StateDataProfile` | WeatherReport | Deadline 30s |
+| `WeatherReportProfile` | `StateDataProfile` | WeatherReport | Writer deadline 2700s (30 min × 1.5 margin); scaled at runtime |
 | `RunwayStatusProfile` | `StateDataProfile` | RunwayStatus | — |
 | `FlightPlanProfile` | `StateDataProfile` | FlightPlan | — |
-| `AircraftTrackingProfile` | `StateDataProfile` | AircraftTracking | — |
+| `AircraftTrackingProfile` | `StateDataProfile` | AircraftTracking | Shared ownership + BY_SOURCE_TIMESTAMP (cooperative handoffs) |
 | `FacilityStatusProfile` | `StateDataProfile` | FacilityStatus | Manual-by-topic liveliness 5s |
-| `ConvectiveCellProfile` | `StateDataProfile` | ConvectiveCell | Deadline 15s |
+| `ConvectiveCellProfile` | `StateDataProfile` | ConvectiveCell | Writer deadline 450s (5 min × 1.5 margin); scaled at runtime |
 | `HandoffProfile` | `BuiltinQosLib::Generic.KeepLastReliable.TransientLocal` | Handoff | Reliable, keep-last-5, manual-by-topic liveliness 15s |
 | `FlightPlanRequestReplyProfile` | `BuiltinQosLib::Pattern.RPC` | FlightPlanFilingService | Reliable, keep-all, RPC-tuned protocol |
 | `GateAssignmentRequestReplyProfile` | `BuiltinQosLib::Pattern.RPC` | GateAssignmentService | Reliable, keep-all, RPC-tuned protocol |
+
+### Simulation Speed and QoS Scaling
+
+The XML profiles define all time-dependent QoS values for **real-time (speed = 1×)**.
+When running at accelerated simulation speed (e.g., 20×), wall-clock periods must
+shrink proportionally so that DDS deadlines, liveliness checks, and other time-based
+policies remain meaningful.
+
+The shared utility functions `writer_qos_for_speed()` and `reader_qos_for_speed()`
+in [`common.py`](python/common.py) handle this automatically. They load the QoS
+from the XML profile and divide all time-dependent durations by the current
+`sim_speed`:
+
+| QoS Policy | Writer | Reader |
+|---|---|---|
+| `deadline.period` | ✓ | ✓ |
+| `liveliness.lease_duration` | ✓ | ✓ |
+| `latency_budget.duration` | ✓ | ✓ |
+| `lifespan.duration` | ✓ | — |
+| `time_based_filter.minimum_separation` | — | ✓ |
+
+`INFINITE` and zero durations are left unchanged. Apps that need speed-scaled QoS
+call `writer_qos_for_speed(provider, profile, speed)` instead of `writer_qos()`
+at writer creation, and re-apply when speed changes at runtime.
 
 ---
 
@@ -293,6 +317,26 @@ This way the reader:
 
 ## 6. DDS Participants and Data Flows
 
+### Publish/Subscribe Matrix
+
+| Topic | Airplane | Tower | TRACON | Center | Airport | FPS | Weather | Dashboard |
+|---|---|---|---|---|---|---|---|---|
+| AircraftPosition | **P** | S | S | S | | | | S |
+| ControllerInstruction | S | **P** | **P** | **P** | | | | S |
+| PilotAcknowledgment | **P** | S | S | S | | | | S |
+| Handoff | | **P/S** | **P/S** | **P/S** | | | | S |
+| AircraftTracking | | **P** | **P** | **P** | | | | S |
+| Alert | | **P** | **P** | **P** | | | | S |
+| FlightPlan | | S | S | S | | **P** | | S |
+| FacilityStatus | | **P** | **P** | **P** | | | | S |
+| WeatherReport | S | S | S | | **P** | | | S |
+| RunwayStatus | | **P** | | | **P** | | | S |
+| ConvectiveCell | | | | S | | | **P** | **P**/S |
+| FlightPlanFiling | req | | | | | **rep** | | |
+| GateAssignment | req | | | | **rep** | | | |
+
+**P** = publish, **S** = subscribe, **P/S** = both, **req** = requester, **rep** = replier
+
 ### 6.1 Airplane Participant
 
 Each aircraft runs one DomainParticipant.
@@ -308,6 +352,8 @@ Each aircraft runs one DomainParticipant.
 | **Requester** | `FlightPlanFilingService` | `FlightPlanRequestReplyProfile` | File/amend flight plans |
 | **Requester** | `GateAssignmentService` | `GateAssignmentRequestReplyProfile` | Request gate on arrival |
 
+> **Note:** The airplane does **not** subscribe to the `Handoff` topic. It is fully passive in the handoff process — controllers coordinate among themselves, and the airplane only reacts to `ControllerInstruction` samples.
+
 ### 6.2 Control Tower Participant
 
 One DomainParticipant per airport.
@@ -320,7 +366,7 @@ One DomainParticipant per airport.
 | **Publish** | `ControllerInstruction` | `ControllerInstructionProfile` | Clearances and commands |
 | **Subscribe** | `PilotAcknowledgment` | `PilotAcknowledgmentProfile` | Pilot responses |
 | **Publish** | `RunwayStatus` | `RunwayStatusProfile` | Runway state changes |
-| **Publish/Subscribe (CFT)** | `Handoff` | `HandoffProfile` | Filter: `to/from_controller_id`; hands departures to TRACON |
+| **Publish/Subscribe (CFT)** | `Handoff` | `HandoffProfile` | Filter: `to/from_controller_id`; hands departures to TRACON at ≥ 1,500 ft (climbing) |
 | **Publish** | `Alert` | `AlertProfile` | Terminal-area conflicts |
 | **Publish** | `AircraftTracking` | `AircraftTrackingProfile` | Current controller-of-record per aircraft |
 | **Publish** | `FacilityStatus` | `FacilityStatusProfile` | Facility heartbeat and tracked aircraft count |
@@ -338,7 +384,7 @@ One DomainParticipant per TRACON facility (may serve one or more airports).
 | **Subscribe (CFT)** | `AircraftPosition` | `AircraftPositionProfile` | Filter: altitude band (500–18,000 ft) |
 | **Publish** | `ControllerInstruction` | `ControllerInstructionProfile` | Speed/heading instructions, approach sequencing |
 | **Subscribe** | `PilotAcknowledgment` | `PilotAcknowledgmentProfile` | Pilot responses |
-| **Publish/Subscribe (CFT)** | `Handoff` | `HandoffProfile` | Filter: `to/from_controller_id`; hands to Tower (↓3,000 ft) and Center (↑17,000 ft) |
+| **Publish/Subscribe (CFT)** | `Handoff` | `HandoffProfile` | Filter: `to/from_controller_id`; hands arriving to Tower (≤ 3,000 ft) and departing to Center (≥ 17,000 ft) |
 | **Publish** | `Alert` | `AlertProfile` | Terminal separation violations |
 | **Publish** | `AircraftTracking` | `AircraftTrackingProfile` | Current controller-of-record per aircraft |
 | **Publish** | `FacilityStatus` | `FacilityStatusProfile` | Facility heartbeat and tracked aircraft count |
@@ -356,7 +402,7 @@ One DomainParticipant per center.
 | **Subscribe (CFT)** | `AircraftPosition` | `AircraftPositionProfile` | Filter: altitude band (18,000–60,000 ft) + lat/lon bounding box |
 | **Publish** | `ControllerInstruction` | `ControllerInstructionProfile` | Routing/altitude amendments |
 | **Subscribe** | `PilotAcknowledgment` | `PilotAcknowledgmentProfile` | Pilot responses |
-| **Publish/Subscribe (CFT)** | `Handoff` | `HandoffProfile` | Filter: `to/from_controller_id`; hands descending aircraft to TRACON |
+| **Publish/Subscribe (CFT)** | `Handoff` | `HandoffProfile` | Filter: `to/from_controller_id`; hands descending aircraft to TRACON (< `min_alt` + 2,000 ft AND vertical speed < −500 fpm) or exiting aircraft to neighboring center (point-in-polygon) |
 | **Publish** | `Alert` | `AlertProfile` | Separation violations |
 | **Publish** | `AircraftTracking` | `AircraftTrackingProfile` | Current controller-of-record per aircraft |
 | **Publish** | `FacilityStatus` | `FacilityStatusProfile` | Facility heartbeat and tracked aircraft count |
@@ -371,7 +417,7 @@ Publishes infrastructure and environmental state.
 
 | Direction | Topic / Service | QoS Profile | Notes |
 |---|---|---|---|
-| **Publish** | `WeatherReport` | `WeatherReportProfile` | Periodic weather (≤30s) |
+| **Publish** | `WeatherReport` | `WeatherReportProfile` | 30-min sim-time cadence (scaled by `writer_qos_for_speed()`) |
 | **Publish** | `RunwayStatus` | `RunwayStatusProfile` | Runway changes |
 | **Replier** | `GateAssignmentService` | `GateAssignmentRequestReplyProfile` | Gate allocation |
 
@@ -505,7 +551,75 @@ requester = Requester(
 
 ---
 
-## 8. Fault Tolerance and Liveliness
+## 8. Handoff Protocol
+
+Handoffs transfer controller-of-record responsibility between adjacent ATC facilities. The protocol uses two DDS topics: `Handoff` (coordination) and `AircraftTracking` (controller-of-record state).
+
+Flight lifecycle with handoff triggers:
+
+```
+ Tower                 TRACON                  Center
+──────────────       ──────────────        ──────────────────
+ PREFLIGHT            CLIMB (dep)           CRUISE
+ TAXI_OUT             APPROACH (arr)        DESCENT
+ TAKEOFF                                    
+ CLIMB (dep)                                
+ LANDING                                    
+ TAXI_IN                                    
+ PARKED                                     
+
+ Departure chain:                  Arrival chain:
+ ───────────────                   ──────────────
+ PREFLIGHT → TAXI_OUT → TAKEOFF    CRUISE → DESCENT
+    → CLIMB                           │
+       │  ≥1,500 ft (climbing)        │  <20,000 ft + descending
+       ▼                              ▼
+    CLIMB (TRACON)                 APPROACH (TRACON)
+       │  ≥17,000 ft                  │  ≤3,000 ft
+       ▼                              ▼
+    CRUISE (Center)                LANDING → TAXI_IN → PARKED
+       │  polygon exit                     (Tower)
+       ▼
+    CRUISE (next Center)  ◄── repeats until descent
+```
+
+### 8.1 Two-Step Protocol
+
+The handoff protocol uses only **INITIATED** and **ACCEPTED** status values. The `COMPLETED` and `REJECTED` enum values exist in the IDL but are not currently used.
+
+1. **Initiating controller** writes a `Handoff` sample with `status = INITIATED`, specifying `to_controller_id` and `to_facility_type`.
+2. **Receiving controller** reads the incoming handoff via its CFT (`to/from_controller_id`), writes back `status = ACCEPTED`, and publishes an `AircraftTracking` sample claiming controller-of-record.
+3. **Initiating controller** sees the `ACCEPTED` response, unregisters its `AircraftTracking` instance for that aircraft, and removes the aircraft from its local tracking state.
+
+With `SHARED_OWNERSHIP` + `BY_SOURCE_TIMESTAMP` on `AircraftTracking`, the accepting controller's newer sample immediately supersedes the old controller's at all readers — no explicit "release" is needed.
+
+![Handoff Protocol Sequence](diagrams/Handoff_Protocol.svg)
+
+### 8.2 Handoff Triggers by Facility
+
+| From | To | Condition | Code Reference |
+|---|---|---|---|
+| **Tower** | TRACON | Departing aircraft ≥ 1,500 ft with positive vertical speed | `app_tower.py` |
+| **TRACON** | Tower | Arriving aircraft ≤ 3,000 ft | `app_tracon.py` |
+| **TRACON** | Center | Departing aircraft ≥ 17,000 ft | `app_tracon.py` |
+| **Center** | TRACON | Descending aircraft < `min_alt` + 2,000 ft (default < 20,000 ft) AND vertical speed < −500 fpm | `app_center.py` |
+| **Center** | Center | Aircraft exits center's boundary polygon (point-in-polygon test) | `app_center.py` |
+
+### 8.3 Center Boundary Management
+
+Each center defines a geographic boundary polygon (from `air_traffic_scenario.json`). The CFT bounding box is padded by ±3° to ensure position samples are received slightly before and after polygon exit.
+
+- **`seen_inside` tracking:** The center records when an aircraft has been confirmed inside its polygon. A handoff is only initiated when an aircraft transitions from inside to outside, preventing premature handoffs for aircraft transiting near the boundary.
+- **Never-entered grace period (30 sim-seconds):** If an accepted aircraft never enters the polygon (e.g., misdirected handoff), the center waits 30 sim-seconds, then looks up the correct neighboring center via `find_center_for_position()` and forwards the handoff.
+- **Cross-center discovery:** Centers join both `OPS/ENROUTE/<id>` (concrete) and `OPS/ENROUTE/*` (wildcard). Each center's wildcard matches the other's concrete partition, enabling inter-center handoff communication.
+
+### 8.4 Airplane Passivity
+
+Aircraft do **not** subscribe to the `Handoff` topic. They are entirely passive in the handoff process and unaware of which controller is tracking them. Aircraft only respond to `ControllerInstruction` samples filtered by `tail_number`.
+
+---
+
+## 9. Fault Tolerance and Liveliness
 
 | Mechanism | DDS Feature | Application |
 |---|---|---|
@@ -518,7 +632,7 @@ requester = Requester(
 
 ---
 
-## 9. Discovery Configuration
+## 10. Discovery Configuration
 
 | Setting | Value | Notes |
 |---|---|---|
@@ -543,7 +657,7 @@ requester = Requester(
 
 ---
 
-## 10. Deployment Diagram (DDS View)
+## 11. Deployment Diagram (DDS View)
 
 ```
 ┌───────────────────────── Domain 0: ATC Operations ────────────────────────┐
@@ -589,15 +703,15 @@ requester = Requester(
 │     Request/Reply: FlightPlanFilingService, GateAssignmentService         │
 │                                                                           │
 │   Handoff chain: Tower ↔ TRACON ↔ Center                                  │
-│     Tower   < 3,000 ft  (runway ops, approach clearance)                  │
-│     TRACON  500–18,000 ft (approach sequencing, departure climb)          │
-│     Center  18,000–60,000 ft (en-route separation, sector handoffs)       │
+│     Tower   → TRACON at 1,500 ft (departing); ← TRACON at 3,000 ft        │
+│     TRACON  500–18,000 ft; → Center at 17,000 ft; ← Center at ~20,000 ft  │
+│     Center  18,000–60,000 ft (en-route; polygon + altitude triggers)      │
 └───────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 11. Application-to-Participant Mapping
+## 12. Application-to-Participant Mapping
 
 | Application | Participant | Count | Language |
 |---|---|---|---|
@@ -612,7 +726,7 @@ requester = Requester(
 
 ---
 
-## 12. Project Structure
+## 13. Project Structure
 
 ```
 connext_dds/
@@ -621,7 +735,9 @@ connext_dds/
 ├── air_traffic_scenario.json        # Airports, TRACONs, centers, aircraft, initial_speed
 ├── diagrams/
 │   ├── ATC_Partitions.mermaid
-│   └── ATC_Partitions.svg
+│   ├── ATC_Partitions.svg
+│   ├── Handoff_Protocol.mermaid
+│   └── Handoff_Protocol.svg
 ├── python/
 │   ├── air_traffic.py               # rtiddsgen-generated Python types (DO NOT HAND-EDIT)
 │   ├── common.py                    # Shared utilities (DDS helpers, sim speed, airport coords)
@@ -643,7 +759,7 @@ connext_dds/
 
 ---
 
-## 13. Connext 7.7.0 Features to Leverage
+## 14. Connext 7.7.0 Features to Leverage
 
 | Feature | Usage in ATC System |
 |---|---|
@@ -660,7 +776,7 @@ connext_dds/
 
 ---
 
-## 14. Architecture-to-DDS Mapping Summary
+## 15. Architecture-to-DDS Mapping Summary
 
 | Architecture Concept | DDS Realization |
 |---|---|

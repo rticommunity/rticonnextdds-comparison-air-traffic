@@ -1,7 +1,7 @@
 
 # WARNING: THIS FILE IS AUTO-GENERATED. DO NOT MODIFY.
 
-# This file was generated from air_traffic.idl
+# This file was generated from air_traffic_types.idl
 # using RTI Code Generator (rtiddsgen) version 4.7.0.
 # The rtiddsgen tool is part of the RTI Connext DDS distribution.
 # For more information, type 'rtiddsgen -help' at a command shell
@@ -284,6 +284,7 @@ NationalAirTrafficControl.NavStatus = NationalAirTrafficControl_NavStatus
         'origin_airport': [idl.bound(NationalAirTrafficControl.MAX_AIRPORT_CODE_LEN),],
         'destination_airport': [idl.bound(NationalAirTrafficControl.MAX_AIRPORT_CODE_LEN),],
         'assigned_runway': [idl.bound(NationalAirTrafficControl.MAX_RUNWAY_ID_LEN),],
+        'assigned_gate': [idl.bound(16),],
         'nav_status': [idl.default(0),],
     }
 )
@@ -299,6 +300,7 @@ class NationalAirTrafficControl_AircraftPosition:
     destination_airport: str = ""
     fuel_level_percent: idl.float32 = 0.0
     assigned_runway: Optional[str] = None
+    assigned_gate: Optional[str] = None
     nav_status: Optional[NationalAirTrafficControl.NavStatus] = None
     timestamp: int = 0
 

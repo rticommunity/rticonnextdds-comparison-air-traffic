@@ -12,7 +12,7 @@ import time
 
 import rti.connextdds as dds
 from rti.rpc import Replier
-from air_traffic import NationalAirTrafficControl as ATC
+from air_traffic_types import NationalAirTrafficControl as ATC
 
 FlightPlan = ATC.FlightPlan
 FlightPlanRequest = ATC.FlightPlanRequest

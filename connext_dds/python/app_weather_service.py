@@ -19,7 +19,7 @@ import time
 
 
 import rti.connextdds as dds
-from air_traffic import NationalAirTrafficControl as ATC
+from air_traffic_types import NationalAirTrafficControl as ATC
 
 ConvectiveCell = ATC.ConvectiveCell
 ConvectiveSeverity = ATC.ConvectiveSeverity
@@ -32,6 +32,7 @@ from common import (
     read_sim_speed_from_discovery,
     setup_logging,
     writer_qos,
+    writer_qos_for_speed,
 )
 import common
 
@@ -109,12 +110,15 @@ class WeatherService:
         config_path: str,
         spawn_interval_s: float = 30.0,
         max_cells: int = 5,
+        publish_interval_s: float = 300.0,
     ):
         self.spawn_interval_s = spawn_interval_s
         self.max_cells = max_cells
+        self.publish_interval_s = publish_interval_s
         self.config_path = config_path
         self.cells: dict[str, ActiveCell] = {}
         self._time_since_spawn = 0.0
+        self._time_since_publish = 0.0
 
         # DDS
         self.qos_provider = load_qos_provider()
@@ -131,14 +135,16 @@ class WeatherService:
         self.publisher = create_publisher(self.participant)
 
         cell_topic = dds.Topic(self.participant, "ConvectiveCell", ConvectiveCell)
+        speed = read_sim_speed_from_discovery(self.participant, self.config_path)
         self.cell_writer = dds.DataWriter(
             self.publisher, cell_topic,
-            writer_qos(self.qos_provider, "ConvectiveCellProfile"),
+            writer_qos_for_speed(self.qos_provider, "ConvectiveCellProfile", speed),
         )
+        self._last_qos_speed = speed
 
         log.info(
-            "WeatherService initialized — spawn every %.0fs, max %d cells",
-            spawn_interval_s, max_cells,
+            "WeatherService initialized — spawn every %.0fs, publish every %.0fs, max %d cells",
+            spawn_interval_s, publish_interval_s, max_cells,
         )
 
     def _spawn_cell(self):
@@ -187,7 +193,7 @@ class WeatherService:
             log.info("Disposed cell %s (dissipated)", cell_id)
 
     def run(self, duration_s: float = 120.0):
-        """Main loop — update, spawn, publish at ~1 Hz."""
+        """Main loop — advance cells every wall-tick, publish at sim-time interval."""
         log.info("WeatherService running")
         start = time.time()
         TICK = 1.0  # wall-clock seconds between iterations
@@ -195,6 +201,12 @@ class WeatherService:
         while not shutdown_flag and (time.time() - start) < duration_s:
             sim_speed = read_sim_speed_from_discovery(self.participant, self.config_path)
             dt = TICK * sim_speed
+            if sim_speed != self._last_qos_speed:
+                self._last_qos_speed = sim_speed
+                self.cell_writer.qos = writer_qos_for_speed(
+                    self.qos_provider, "ConvectiveCellProfile", sim_speed,
+                )
+                log.info("Cell QoS rescaled for speed=%.1fx", sim_speed)
 
             # Advance all cells
             for cell in list(self.cells.values()):
@@ -211,9 +223,15 @@ class WeatherService:
             if self._time_since_spawn >= self.spawn_interval_s and len(self.cells) < self.max_cells:
                 self._spawn_cell()
                 self._time_since_spawn = 0.0
-
-            # Publish all active cells
-            self._publish_cells()
+                # Publish immediately on spawn so subscribers see the new cell
+                self._publish_cells()
+                self._time_since_publish = 0.0
+            else:
+                # Publish at realistic radar interval (default 5 min sim-time)
+                self._time_since_publish += dt
+                if self._time_since_publish >= self.publish_interval_s:
+                    self._publish_cells()
+                    self._time_since_publish = 0.0
 
             time.sleep(TICK)
 
@@ -229,6 +247,8 @@ def main():
     parser.add_argument("--qos-file", required=True, help="Path to QoS XML file")
     parser.add_argument("--duration", type=float, default=120.0, help="Run duration in seconds")
     parser.add_argument("--spawn-interval", type=float, default=30.0, help="Seconds between cell spawns (sim-time)")
+    parser.add_argument("--publish-interval", type=float, default=300.0,
+                        help="Cell publication interval in sim-time seconds (default: 300 = 5 min)")
     parser.add_argument("--max-cells", type=int, default=5, help="Max concurrent cells")
     args = parser.parse_args()
 
@@ -238,6 +258,7 @@ def main():
         config_path=args.config,
         spawn_interval_s=args.spawn_interval,
         max_cells=args.max_cells,
+        publish_interval_s=args.publish_interval,
     )
     svc.run(duration_s=args.duration)
 
