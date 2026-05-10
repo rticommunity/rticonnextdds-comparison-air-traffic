@@ -278,8 +278,8 @@ class TraconController:
         for i, a in enumerate(airborne):
             for b in airborne[i + 1:]:
                 # Skip co-departing aircraft — they diverge under tower control
-                if a.flight_phase == FlightPhase.DEPARTURE and \
-                        b.flight_phase == FlightPhase.DEPARTURE:
+                if a.flight_phase == FlightPhase.CLIMB and \
+                        b.flight_phase == FlightPhase.CLIMB:
                     continue
                 lat_diff = abs(a.position.latitude - b.position.latitude)
                 lon_diff = abs(a.position.longitude - b.position.longitude)

@@ -652,7 +652,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-
                letter-spacing: 0.6px; color: var(--accent); margin-bottom: 6px;
                display: flex; align-items: center; gap: 6px;
                cursor: pointer; user-select: none; }
-.section-hdr::before { content: '\25BE'; font-size: 0.7rem; transition: transform 0.15s; }
+.section-hdr::before { content: '\25BE'; font-size: 1.1rem; transition: transform 0.15s;
+                      min-width: 1rem; text-align: center; }
 .section.collapsed .section-hdr::before { transform: rotate(-90deg); }
 .section.collapsed .section-body { display: none; }
 .section-hdr .badge { background: var(--accent); color: #000; border-radius: 10px;
