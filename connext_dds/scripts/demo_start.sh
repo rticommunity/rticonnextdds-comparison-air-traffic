@@ -41,9 +41,15 @@ REPO_DIR="$(cd "$PROJECT_DIR/.." && pwd)"
 PYTHON_DIR="$PROJECT_DIR/python"
 
 # ── Connext license ────────────────────────────────────────────────────────
-export NDDSHOME="${NDDSHOME:-/Applications/rti_connext_dds-7.7.0}"
-export RTI_LICENSE_FILE="${RTI_LICENSE_FILE:-$NDDSHOME/rti_license.dat}"
-export DYLD_LIBRARY_PATH="$NDDSHOME/lib/arm64Darwin23clang16.0"
+if [[ -n "${NDDSHOME:-}" ]]; then
+    export RTI_LICENSE_FILE="${RTI_LICENSE_FILE:-$NDDSHOME/rti_license.dat}"
+    # Native library path (only needed when using a local Connext installation)
+    case "$(uname -s)" in
+        Darwin) export DYLD_LIBRARY_PATH="${DYLD_LIBRARY_PATH:-$NDDSHOME/lib/$(ls "$NDDSHOME/lib" 2>/dev/null | head -1)}" ;;
+        Linux)  export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-$NDDSHOME/lib/$(ls "$NDDSHOME/lib" 2>/dev/null | head -1)}" ;;
+    esac
+fi
+# RTI_LICENSE_FILE can also be set directly without NDDSHOME
 
 # ── Python from project venv ───────────────────────────────────────────────
 PYTHON="${PYTHON:-$REPO_DIR/venv/bin/python3}"

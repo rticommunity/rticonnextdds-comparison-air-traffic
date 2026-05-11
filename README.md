@@ -91,6 +91,21 @@ source setup.sourceme
 
 Open http://localhost:8050 for the real-time dashboard.
 
+### Docker
+
+```bash
+# Build the image (from repo root)
+docker build -f docker/Dockerfile -t atc-demo .
+
+# Run the full demo (all components)
+docker run -v ./rti_license.dat:/tmp/rti_license.dat -p 8050:8050 atc-demo
+
+# Run a single component
+docker run -v ./rti_license.dat:/tmp/rti_license.dat -p 8050:8050 atc-demo dashboard
+```
+
+`--network host` is recommended so DDS multicast discovery works between containers. Pass any component name (`dashboard`, `center`, `tower`, `tracon`, `airport`, `airplane`, `flightplan`, `weather`) or `all` (default). On Linux, add `--network host` for DDS discovery across multiple containers.
+
 See [`connext_dds/README.md`](connext_dds/README.md) for prerequisites, installation, detailed options, and design notes.
 
 ## Repository Structure
