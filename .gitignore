@@ -3,3 +3,4 @@ __pycache__/
 .DS_Store
 .vscode
 venv/
+docs/design_process/prompts_full*.md

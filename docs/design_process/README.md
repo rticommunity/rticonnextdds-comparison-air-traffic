@@ -11,5 +11,4 @@ This directory documents the journey of building the Air Traffic Control simulat
 5. **[opus_nomcp_design_connext_dds_iter1.md](opus_nomcp_design_connext_dds_iter1.md)** — Design iteration without MCP
 6. **[opus_mcp_design_connext_dds_iter1.md](opus_mcp_design_connext_dds_iter1.md)** — Design iteration with MCP
 7. **[use_of_connext_mcp.md](use_of_connext_mcp.md)** — Comparison: MCP vs no-MCP approach
-8. **[prompts_full1.md](prompts_full1.md)** through **[prompts_full7.md](prompts_full7.md)** — Full prompt transcripts
-9. **[directory_reorg_plan.md](directory_reorg_plan.md)** — Repository restructure plan for GitHub publication
+8. **[directory_reorg_plan.md](directory_reorg_plan.md)** — Repository restructure plan for GitHub publication

@@ -20,9 +20,11 @@ The system is not running so there no reading of live data. The Connext MCP shou
 
 ## 3.1 Agent asks Connext Expert for Datamodels and Best-Practices
 > Using the ask_connext tool... aks:
+```json
 {
   "connext_question": "I'm designing a national air-traffic control demo system using RTI Connext DDS 7.7.0 Pro. I need to define IDL data types for the following topics:\n\n1. AircraftPosition - high-frequency position reports keyed by aircraft_id, with 3D position (lat, lon, altitude), velocity (ground speed, vertical speed, heading), flight phase enum, origin/destination airports, fuel level, assigned runway\n2. ControllerInstruction - reliable commands from controllers to aircraft, keyed by instruction_id, with controller_id, aircraft_id, instruction type enum (heading, altitude, speed, clearance, hold, go_around, taxi, pushback), parameters\n3. PilotAcknowledgment - aircraft responses to instructions\n4. FlightPlan - keyed by flight_plan_id with sequence of waypoints, departure/arrival airports, times, status enum\n5. RunwayStatus - keyed by airport_code and runway_id, with status enum (open, closed, occupied)\n6. WeatherReport - keyed by airport_code, with wind, visibility, ceiling, temperature, altimeter, conditions enum\n7. Handoff - controller-to-controller coordination\n8. Alert - emergency/conflict alerts with sequence of involved aircraft\n\nWhat is the recommended modern IDL4 syntax for Connext 7.7.0? Should I use @key, @topic, @mutable/@final extensibility? Bounded vs unbounded strings/sequences? Please provide the complete IDL file."
 }
+```
 > Getd\s IDL output from Connext-MCP
 > Gets a answers to questions:
 
@@ -76,16 +78,219 @@ Type sources:
                 above may be covered by third-party intellectual property rights 
                 or licenses. Check the types' repositories, including any 
                 LICENSE or README files, for more information.*
+
+> Raw MCP tool response (JSON with embedded markdown/IDL):
+
+<details>
+<summary>Click to expand raw MCP response</summary>
+
+```json
 {
   "result": "For **RTI Connext DDS Professional 7.7.0**, the recommended style is to use **modern OMG IDL 4 syntax**: fixed-width integer types like `int32`/`uint32`, standard annotations such as `@key`, `@nested`, `@appendable`, `@mutable`, `@final`, and optionally `@topic` for top-level publish/subscribe types. Connext supports these built-in annotations, and if you don’t specify extensibility, the default is **appendable**. `@key` is the correct way to define keyed topics. `@topic` is supported, but it is mainly useful to explicitly mark top-level types for code generation; it is not required if your workflow already treats these structs as topic types. For reusable helper structs, `@nested` is recommended so code generation doesn’t create unnecessary top-level reader/writer APIs for them.  \n\nFor extensibility choice:  \n- Use **`@appendable`** as the default for most operational demo types when you expect future evolution by appending fields.  \n- Use **`@final`** only when you want a fixed schema and maximum rigidity.  \n- Use **`@mutable`** only if you truly need field reordering/add/remove flexibility across versions; it is more flexible but usually not necessary for a first demo model.  \n\nFor strings and sequences, **bounded** is generally recommended over unbounded in Connext because it gives predictable memory usage and avoids relying on special unbounded-generation behavior. RTI documentation notes that unbounded strings/sequences require special handling during code generation; otherwise defaults are imposed, and bounded collections are preallocated to their maximum size. For an ATC demo, bounded strings and bounded waypoint / aircraft lists are the safer design choice.  \n\nBelow is a complete **modern IDL4** file for your requested topics, using the types you asked for and keeping the design evolution-friendly with `@appendable`. I used all requested topic types and added supporting nested types/enums only where needed.\n\n```idl\nmodule NationalAirTrafficControl {\n\n    const uint32 MAX_ID_LEN = 64;\n    const uint32 MAX_CALLSIGN_LEN = 16;\n    const uint32 MAX_AIRPORT_CODE_LEN = 8;\n    const uint32 MAX_RUNWAY_ID_LEN = 16;\n    const uint32 MAX_WAYPOINT_NAME_LEN = 16;\n    const uint32 MAX_TEXT_LEN = 256;\n    const uint32 MAX_ROUTE_POINTS = 128;\n    const uint32 MAX_INVOLVED_AIRCRAFT = 16;\n\n    typedef string<MAX_ID_LEN> IdString;\n    typedef string<MAX_CALLSIGN_LEN> Callsign;\n    typedef string<MAX_AIRPORT_CODE_LEN> AirportCode;\n    typedef string<MAX_RUNWAY_ID_LEN> RunwayId;\n    typedef string<MAX_WAYPOINT_NAME_LEN> WaypointName;\n    typedef string<MAX_TEXT_LEN> ShortText;\n    typedef int64 Timestamp;\n\n    @nested\n    @appendable\n    struct GeoPosition {\n        double latitude;\n        double longitude;\n        double altitude_feet;\n    };\n\n    @nested\n    @appendable\n    struct Wind {\n        uint16 direction_degrees;\n        float speed_knots;\n        @optional float gust_knots;\n    };\n\n    @nested\n    @appendable\n    struct Waypoint {\n        WaypointName name;\n        GeoPosition position;\n        @optional Timestamp estimated_time;\n    };\n\n    @appendable\n    enum FlightPhase {\n        PREFLIGHT,\n        TAXI_OUT,\n        TAKEOFF,\n        CLIMB,\n        CRUISE,\n        DESCENT,\n        APPROACH,\n        LANDING,\n        TAXI_IN,\n        PARKED,\n        HOLDING\n    };\n\n    @appendable\n    enum InstructionType {\n        HEADING,\n        ALTITUDE,\n        SPEED,\n        CLEARANCE,\n        HOLD,\n        GO_AROUND,\n        TAXI,\n        PUSHBACK\n    };\n\n    @appendable\n    enum AcknowledgmentStatus {\n        RECEIVED,\n        WILCO,\n        UNABLE,\n        READBACK_CORRECT,\n        READBACK_INCORRECT\n    };\n\n    @appendable\n    enum FlightPlanStatus {\n        FILED,\n        ACTIVE,\n        AMENDED,\n        DELAYED,\n        CANCELLED,\n        COMPLETED\n    };\n\n    @appendable\n    enum RunwayOperationalStatus {\n        OPEN,\n        CLOSED,\n        OCCUPIED\n    };\n\n    @appendable\n    enum WeatherCondition {\n        VMC,\n        IMC,\n        RAIN,\n        SNOW,\n        FOG,\n        THUNDERSTORM,\n        WIND_SHEAR,\n        ICE\n    };\n\n    @appendable\n    enum HandoffStatus {\n        INITIATED,\n        ACCEPTED,\n        REJECTED,\n        COMPLETED,\n        CANCELLED\n    };\n\n    @appendable\n    enum AlertSeverity {\n        INFO,\n        CAUTION,\n        WARNING,\n        CRITICAL\n    };\n\n    @appendable\n    enum AlertType {\n        EMERGENCY,\n        TRAFFIC_CONFLICT,\n        WEATHER_HAZARD,\n        RUNWAY_INCURSION,\n        COMMUNICATION_LOSS,\n        SYSTEM_FAILURE\n    };\n\n    @topic\n    @appendable\n    struct AircraftPosition {\n        @key IdString aircraft_id;\n        Callsign callsign;\n        GeoPosition position;\n        float ground_speed_knots;\n        float vertical_speed_fpm;\n        float heading_degrees;\n        FlightPhase flight_phase;\n        AirportCode origin_airport;\n        AirportCode destination_airport;\n        float fuel_level_percent;\n        @optional RunwayId assigned_runway;\n        Timestamp timestamp;\n    };\n\n    @topic\n    @appendable\n    struct ControllerInstruction {\n        @key IdString instruction_id;\n        IdString controller_id;\n        IdString aircraft_id;\n        InstructionType instruction_type;\n        @optional float assigned_heading_degrees;\n        @optional int32 assigned_altitude_feet;\n        @optional float assigned_speed_knots;\n        @optional ShortText clearance_text;\n        @optional ShortText taxi_route;\n        @optional ShortText hold_reason;\n        Timestamp issued_at;\n    };\n\n    @topic\n    @appendable\n    struct PilotAcknowledgment {\n        @key IdString acknowledgment_id;\n        IdString instruction_id;\n        IdString aircraft_id;\n        AcknowledgmentStatus status;\n        @optional ShortText response_text;\n        Timestamp acknowledged_at;\n    };\n\n    @topic\n    @appendable\n    struct FlightPlan {\n        @key IdString flight_plan_id;\n        IdString aircraft_id;\n        Callsign callsign;\n        AirportCode departure_airport;\n        AirportCode arrival_airport;\n        sequence<Waypoint, MAX_ROUTE_POINTS> waypoints;\n        Timestamp scheduled_departure_time;\n        @optional Timestamp estimated_departure_time;\n        @optional Timestamp scheduled_arrival_time;\n        @optional Timestamp estimated_arrival_time;\n        FlightPlanStatus status;\n        Timestamp last_updated;\n    };\n\n    @topic\n    @appendable\n    struct RunwayStatus {\n        @key AirportCode airport_code;\n        @key RunwayId runway_id;\n        RunwayOperationalStatus status;\n        @optional ShortText remarks;\n        Timestamp timestamp;\n    };\n\n    @topic\n    @appendable\n    struct WeatherReport {\n        @key AirportCode airport_code;\n        Wind wind;\n        float visibility_meters;\n        int32 ceiling_feet;\n        float temperature_celsius;\n        float altimeter_hpa;\n        WeatherCondition conditions;\n        Timestamp observation_time;\n    };\n\n    @topic\n    @appendable\n    struct Handoff {\n        @key IdString handoff_id;\n        IdString aircraft_id;\n        IdString from_controller_id;\n        IdString to_controller_id;\n        HandoffStatus status;\n        @optional ShortText sector;\n        @optional ShortText frequency;\n        Timestamp initiated_at;\n        @optional Timestamp completed_at;\n    };\n\n    @topic\n    @appendable\n    struct Alert {\n        @key IdString alert_id;\n        AlertType alert_type;\n        AlertSeverity severity;\n        sequence<IdString, MAX_INVOLVED_AIRCRAFT> involved_aircraft;\n        @optional AirportCode airport_code;\n        @optional RunwayId runway_id;\n        ShortText message;\n        Timestamp timestamp;\n    };\n\n};\n```\n\n### Recommendations for your specific questions\n\n**1. Should I use `@key`?**  \nYes. Absolutely for all keyed topics. That is the standard Connext/IDL way to define instance identity.\n\n**2. Should I use `@topic`?**  \nYou can. It is supported and useful to explicitly mark top-level publishable types. I recommend it here because your file contains both helper types and topic types.\n\n**3. `@mutable`, `@appendable`, or `@final`?**  \nFor this demo, I recommend **`@appendable`** for nearly all structs and enums. It gives you room to evolve the schema later without the extra complexity of mutable types. Use `@final` only if you know the type will not evolve. Use `@mutable` only if you need maximum schema evolution flexibility.\n\n**4. Bounded or unbounded strings/sequences?**  \nUse **bounded** unless you have a strong reason not to. For ATC systems, bounded types are usually better because they make memory and wire-size behavior more predictable.\n\n### A few modeling notes\n\n- I used **composite keying** for `RunwayStatus` by marking both `airport_code` and `runway_id` as `@key`. That matches your requirement better than inventing a synthetic runway key.\n- For `ControllerInstruction`, I modeled “parameters” as optional typed fields plus text fields. That is usually better than a generic blob because it preserves type safety.\n- For `Alert`, I used a bounded sequence of aircraft IDs, since you asked for a sequence of involved aircraft.\n- For `FlightPlan`, I keyed by `flight_plan_id` exactly as requested.\n\n### QoS guidance\n\nSince this is a Connext Professional design question, I also recommend starting with built-in QoS Profiles/Snippets for the operational behavior:\n\n- **AircraftPosition**: best-effort or reliable depending on your demo goals; often high-rate telemetry starts from a periodic-data pattern.\n- **ControllerInstruction / PilotAcknowledgment / Handoff / Alert**: reliable communication is usually appropriate.\n- **WeatherReport / RunwayStatus / FlightPlan**: reliable plus durability may be useful if late joiners should receive the latest state.\n\nIf you want, I can provide next:\n\n1. a matching **XML QoS profile file** for these topics for Connext Professional,  \n2. the **Python publisher/subscriber skeletons** for this IDL, or  \n3. a version of this IDL adjusted to exactly match your earlier air-traffic model conventions.\n\nSources:\n\n* [Defining Extensible Types](https://community.rti.com/static/documentation/connext-dds/7.6.0/doc/manuals/connext_dds_professional/extensible_types_guide/extensible_types/Defining_Extensible_Types.htm)\n* [Using Builtin Annotations](https://community.rti.com/static/documentation/connext-dds/7.6.0/doc/manuals/connext_dds_professional/users_manual/users_manual/Using_BuiltinAnnotations.htm)\n* [Extensible Types](https://community.rti.com/static/documentation/connext-dds/7.6.0/doc/manuals/connext_dds_professional/extensible_types_guide/extensible_types/XTypes_Intro.htm)\n* [Translations for IDL Types](https://community.rti.com/static/documentation/connext-dds/7.6.0/doc/manuals/connext_dds_professional/users_manual/users_manual/Translations_for_IDL_Types.htm)\n\nType sources:\n\n* [Defense] [UMAA::SA::WeatherStatus::WeatherReportType](https://github.com/rticommunity/dds-datamodels-umaa/tree/version/6.0.0-enhanced/datamodel/idl/UMAA/SA/WeatherStatus/WeatherReportType.idl)\n\n***NOTE:** Some of the types provided \n                above may be covered by third-party intellectual property rights \n                or licenses. Check the types' repositories, including any \n                LICENSE or README files, for more information.*"
 }
+```
+
+</details>
+
+The IDL returned by the Connext MCP expert (extracted from the JSON response above):
+
+```idl
+module NationalAirTrafficControl {
+
+    const uint32 MAX_ID_LEN = 64;
+    const uint32 MAX_CALLSIGN_LEN = 16;
+    const uint32 MAX_AIRPORT_CODE_LEN = 8;
+    const uint32 MAX_RUNWAY_ID_LEN = 16;
+    const uint32 MAX_WAYPOINT_NAME_LEN = 16;
+    const uint32 MAX_TEXT_LEN = 256;
+    const uint32 MAX_ROUTE_POINTS = 128;
+    const uint32 MAX_INVOLVED_AIRCRAFT = 16;
+
+    typedef string<MAX_ID_LEN> IdString;
+    typedef string<MAX_CALLSIGN_LEN> Callsign;
+    typedef string<MAX_AIRPORT_CODE_LEN> AirportCode;
+    typedef string<MAX_RUNWAY_ID_LEN> RunwayId;
+    typedef string<MAX_WAYPOINT_NAME_LEN> WaypointName;
+    typedef string<MAX_TEXT_LEN> ShortText;
+    typedef int64 Timestamp;
+
+    @nested @appendable
+    struct GeoPosition {
+        double latitude;
+        double longitude;
+        double altitude_feet;
+    };
+
+    @nested @appendable
+    struct Wind {
+        uint16 direction_degrees;
+        float speed_knots;
+        @optional float gust_knots;
+    };
+
+    @nested @appendable
+    struct Waypoint {
+        WaypointName name;
+        GeoPosition position;
+        @optional Timestamp estimated_time;
+    };
+
+    @appendable
+    enum FlightPhase {
+        PREFLIGHT, TAXI_OUT, TAKEOFF, CLIMB, CRUISE,
+        DESCENT, APPROACH, LANDING, TAXI_IN, PARKED, HOLDING
+    };
+
+    @appendable
+    enum InstructionType {
+        HEADING, ALTITUDE, SPEED, CLEARANCE,
+        HOLD, GO_AROUND, TAXI, PUSHBACK
+    };
+
+    @appendable
+    enum AcknowledgmentStatus {
+        RECEIVED, WILCO, UNABLE, READBACK_CORRECT, READBACK_INCORRECT
+    };
+
+    @appendable
+    enum FlightPlanStatus {
+        FILED, ACTIVE, AMENDED, DELAYED, CANCELLED, COMPLETED
+    };
+
+    @appendable
+    enum RunwayOperationalStatus { OPEN, CLOSED, OCCUPIED };
+
+    @appendable
+    enum WeatherCondition {
+        VMC, IMC, RAIN, SNOW, FOG, THUNDERSTORM, WIND_SHEAR, ICE
+    };
+
+    @appendable
+    enum HandoffStatus { INITIATED, ACCEPTED, REJECTED, COMPLETED, CANCELLED };
+
+    @appendable
+    enum AlertSeverity { INFO, CAUTION, WARNING, CRITICAL };
+
+    @appendable
+    enum AlertType {
+        EMERGENCY, TRAFFIC_CONFLICT, WEATHER_HAZARD,
+        RUNWAY_INCURSION, COMMUNICATION_LOSS, SYSTEM_FAILURE
+    };
+
+    @topic @appendable
+    struct AircraftPosition {
+        @key IdString aircraft_id;
+        Callsign callsign;
+        GeoPosition position;
+        float ground_speed_knots;
+        float vertical_speed_fpm;
+        float heading_degrees;
+        FlightPhase flight_phase;
+        AirportCode origin_airport;
+        AirportCode destination_airport;
+        float fuel_level_percent;
+        @optional RunwayId assigned_runway;
+        Timestamp timestamp;
+    };
+
+    @topic @appendable
+    struct ControllerInstruction {
+        @key IdString instruction_id;
+        IdString controller_id;
+        IdString aircraft_id;
+        InstructionType instruction_type;
+        @optional float assigned_heading_degrees;
+        @optional int32 assigned_altitude_feet;
+        @optional float assigned_speed_knots;
+        @optional ShortText clearance_text;
+        @optional ShortText taxi_route;
+        @optional ShortText hold_reason;
+        Timestamp issued_at;
+    };
+
+    @topic @appendable
+    struct PilotAcknowledgment {
+        @key IdString acknowledgment_id;
+        IdString instruction_id;
+        IdString aircraft_id;
+        AcknowledgmentStatus status;
+        @optional ShortText response_text;
+        Timestamp acknowledged_at;
+    };
+
+    @topic @appendable
+    struct FlightPlan {
+        @key IdString flight_plan_id;
+        IdString aircraft_id;
+        Callsign callsign;
+        AirportCode departure_airport;
+        AirportCode arrival_airport;
+        sequence<Waypoint, MAX_ROUTE_POINTS> waypoints;
+        Timestamp scheduled_departure_time;
+        @optional Timestamp estimated_departure_time;
+        @optional Timestamp scheduled_arrival_time;
+        @optional Timestamp estimated_arrival_time;
+        FlightPlanStatus status;
+        Timestamp last_updated;
+    };
+
+    @topic @appendable
+    struct RunwayStatus {
+        @key AirportCode airport_code;
+        @key RunwayId runway_id;
+        RunwayOperationalStatus status;
+        @optional ShortText remarks;
+        Timestamp timestamp;
+    };
+
+    @topic @appendable
+    struct WeatherReport {
+        @key AirportCode airport_code;
+        Wind wind;
+        float visibility_meters;
+        int32 ceiling_feet;
+        float temperature_celsius;
+        float altimeter_hpa;
+        WeatherCondition conditions;
+        Timestamp observation_time;
+    };
+
+    @topic @appendable
+    struct Handoff {
+        @key IdString handoff_id;
+        IdString aircraft_id;
+        IdString from_controller_id;
+        IdString to_controller_id;
+        HandoffStatus status;
+        @optional ShortText sector;
+        @optional ShortText frequency;
+        Timestamp initiated_at;
+        @optional Timestamp completed_at;
+    };
+
+    @topic @appendable
+    struct Alert {
+        @key IdString alert_id;
+        AlertType alert_type;
+        AlertSeverity severity;
+        sequence<IdString, MAX_INVOLVED_AIRCRAFT> involved_aircraft;
+        @optional AirportCode airport_code;
+        @optional RunwayId runway_id;
+        ShortText message;
+        Timestamp timestamp;
+    };
+
+};
+```
 
 ## 3.2 Agent asks Connext Expert for Qos recommendations
 
 >
+```json
 {
   "connext_question": "For an air-traffic control demo system in Connext DDS 7.7.0 Pro, I need a complete XML QoS profile file (USER_QOS_PROFILES.xml) with the following profiles:\n\n1. PositionReportingProfile - for AircraftPosition topic: high-rate periodic data at ~5Hz, best-effort reliability, keep-last-1 history, volatile durability, deadline of 200ms, latency budget 50ms, lifespan 1s, exclusive ownership\n2. ReliableCommandProfile - for ControllerInstruction and PilotAcknowledgment: reliable, keep-all history, transient-local durability, deadline 5s, automatic liveliness with 10s lease, transport priority 5\n3. StateDataProfile - for RunwayStatus, WeatherReport, FlightPlan: reliable, keep-last-1, transient-local, exclusive ownership, deadline 30s for weather\n4. AlertBroadcastProfile - for Alert topic: reliable, keep-all, transient-local, lifespan 60s, transport priority 10 (highest), time-based filter minimum separation 0\n5. HandoffProfile - for Handoff topic: reliable, keep-last-5, transient-local, manual-by-topic liveliness 15s lease\n\nPlease provide the complete XML QoS profile file using Connext 7.7.0 XML format with proper base profiles from BuiltinQosLib where appropriate. Include both DataWriter and DataReader QoS in each profile."
 }
+```
 
 > Connext-MCP gives detailed response with specific, validated XML profiles for this App
 
@@ -553,9 +758,11 @@ Sources:
 
 
 ## 3.3 Agent asks Connext Expert for architecture recommendations (domains, content fileterd topics, partitions)
+```json
 {
   "connext_question": "For an air-traffic control system using Connext DDS 7.7.0 Pro with multiple airports, en-route centers, and hundreds of aircraft:\n\n1. DOMAIN ARCHITECTURE: Should I use a single domain or multiple domains? What are the trade-offs? How should I use DDS partitions to logically separate airport-local traffic from en-route traffic and national-scope data?\n\n2. CONTENT-FILTERED TOPICS: I need aircraft to only receive instructions addressed to them (filter by aircraft_id), control towers to only see local traffic (filter by destination_airport or origin_airport), and en-route centers to filter by altitude range. What are the best practices for Content-Filtered Topics in Connext 7.7.0? Can writer-side filtering be enabled? What is the performance impact?\n\n3. PARTITIONS vs CFTs: When should I prefer partitions over content-filtered topics for this scenario? Can I combine both? \n\nPlease provide specific Connext 7.7.0 guidance with XML configuration examples for partitions and content-filtered topic setup."
 }
+```
 
 > Connext-MCP gives specific recommendations
 
@@ -1296,9 +1503,11 @@ If you want, I can next provide a **full XML-based application example** for thi
 
 ## 3.4 Agent asks Connext Expert for RPC guidance
 >
+```json
 {
   "connext_question": "For Connext DDS 7.7.0 Pro, I need to implement two Request/Reply services in an air-traffic control system:\n\n1. Flight Plan Filing: An aircraft submits a FlightPlan; a central service validates and responds with acceptance/rejection\n2. Gate Assignment: An arriving aircraft requests a gate; the airport responds with an assignment\n\nPlease provide:\n1. The recommended IDL types for request/reply in Connext 7.7.0 (do I need special annotations?)\n2. Python code examples using the Connext 7.7.0 Request/Reply API for both the Requester and Replier sides\n3. QoS recommendations for request/reply services\n4. Any XML Application Creation support for request/reply in 7.7.0?\n\nAlso, what Connext 7.7.0-specific features should I leverage for this ATC system? For example:\n- XML-Based Application Creation\n- Modern Python API features\n- Zero Copy transfer\n- Monitoring Library integration\n- Any new 7.7.0 features relevant to this use case?"
 }
+```
 > Connext-MCP gives specific recommendations, including types and example code
 
 For **RTI Connext Professional 7.7.0**, your ATC use case maps very naturally to **two Request/Reply services**:

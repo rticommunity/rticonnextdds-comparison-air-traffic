@@ -104,8 +104,7 @@ rticonnextdds-comparison-air-traffic/
     │   ├── initial_connext_issues.md
     │   ├── opus_mcp_design_connext_dds_iter1.md
     │   ├── opus_nomcp_design_connext_dds_iter1.md
-    │   ├── use_of_connext_mcp.md  # MCP vs no-MCP comparison
-    │   └── prompts_full1..7.md    # Full prompt transcripts
+    │   └── use_of_connext_mcp.md  # MCP vs no-MCP comparison
     │
     └── reference/                 # Domain knowledge used during design
         ├── atc_systems.md
@@ -162,7 +161,6 @@ rticonnextdds-comparison-air-traffic/
 | `iterations/initial_connext_issues.md` | `docs/design_process/initial_connext_issues.md` |
 | `iterations/opus_mcp_design_connext_dds_iter1.md` | `docs/design_process/opus_mcp_design_connext_dds_iter1.md` |
 | `iterations/opus_nomcp_design_connext_dds_iter1.md` | `docs/design_process/opus_nomcp_design_connext_dds_iter1.md` |
-| `iterations/prompts_full1.md` through `prompts_full7.md` | `docs/design_process/prompts_full1..7.md` |
 | `iterations/use_of_connext_mcp.md` | `docs/design_process/use_of_connext_mcp.md` |
 | `prompts.md` | `docs/design_process/prompts.md` |
 | `architecture_overview.md` | `docs/design_process/architecture_overview.md` (copy — original also merged into README) |
