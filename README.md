@@ -67,22 +67,31 @@ Aircraft fly between airports while control towers, TRACON facilities, and en-ro
 
 Built with RTI Connext DDS (Python). See [`connext_dds/`](connext_dds/) for the full implementation.
 
+## Prerequisites
+
+- **RTI Connext DDS license file** (no Connext installation required — the Python
+  package is installed automatically from PyPI).
+  A free evaluation license is available at [rti.com/free-trial](https://www.rti.com/free-trial).
+  Set `RTI_LICENSE_FILE` to point to your license file before running the demo.
+- Python 3.10+
+
 ## Quick Start
 
 ```bash
+# Clone the repository
+git clone https://github.com/rticommunity/rticonnextdds-comparison-air-traffic.git
+cd rticonnextdds-comparison-air-traffic
+
 # Set up virtual environment and install dependencies
 source setup.sourceme
 
-# Generate Python types from IDL
-cd connext_dds/python && ./types_generate.sh && cd ../..
-
-# Run the demo (defaults to all apps, 120s)
+# Run the demo (defaults to all apps, 60 min)
 ./connext_dds/scripts/demo_start.sh
 ```
 
 Open http://localhost:8050 for the real-time dashboard.
 
-See [`connext_dds/README.md`](connext_dds/README.md) for prerequisites, detailed options, and design notes.
+See [`connext_dds/README.md`](connext_dds/README.md) for prerequisites, installation, detailed options, and design notes.
 
 ## Repository Structure
 

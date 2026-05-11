@@ -44,11 +44,17 @@ connext_dds/
 
 ### Prerequisites
 
-- [RTI Connext DDS 7.7.0 Professional](https://community.rti.com/static/documentation/developers/)
+- **RTI Connext DDS license file** — set `RTI_LICENSE_FILE` before running.
+  No Connext installation required; the Python package is installed from PyPI.
 - Python 3.10+
 - Virtual environment set up via `source ../setup.sourceme`
 
 ### Generate Types
+
+The generated `air_traffic_types.py` is checked in, so this step is only needed
+if you modify `air_traffic_types.idl`. Regenerating types requires a full
+[RTI Connext DDS Installation](https://community.rti.com/static/documentation/developers/)
+installation (for `rtiddsgen`).
 
 ```bash
 cd python
