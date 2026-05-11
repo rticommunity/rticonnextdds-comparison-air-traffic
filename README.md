@@ -1,12 +1,16 @@
-# National Air-Traffic Control System — Middleware Comparison
+# National Air-Traffic Control System with RTI Connext DDS
 
-A multi-application simulation of a national air-traffic control system, implemented using different middleware technologies to compare developer experience, architecture, and performance.
+A multi-application simulation of a national air-traffic control system built with [RTI Connext DDS](https://www.rti.com/products/connext). The system uses a **data-centric** architecture where applications share state through a common data space rather than exchanging point-to-point messages — aircraft positions, facility status, weather cells, and flight plans are all modeled as distributed shared state that any participant can read, filter, and react to in real time.
 
 This repository is part of the [RTI Connext comparison series](https://github.com/rticommunity) alongside the [tractor-fleet demo](https://github.com/rticommunity/rticonnextdds-comparison-tractor-fleet).
 
 ## Scenario
 
-A simulated national air-traffic control system spanning multiple airports. Aircraft fly between airports while control towers, TRACON facilities, and en-route centers coordinate traffic flow, issue instructions, and manage handoffs — just like the real national airspace system.
+A simulated national air-traffic control system spanning multiple airports. 
+
+![ATC Dashboard showing aircraft flying, control centers, airports, etc.](docs/air_traffic_ui.png)
+
+Aircraft fly between airports while control towers, TRACON facilities, and en-route centers coordinate traffic flow, issue instructions, and manage handoffs — just like the real national airspace system.
 
 ### Components
 
@@ -59,15 +63,11 @@ A simulated national air-traffic control system spanning multiple airports. Airc
 - **Command/Response:** Controller instructions → pilot acknowledgments, handoff initiation → acceptance
 - **Request/Reply:** Flight plan filing, gate assignment
 
-## Implementations
+## Implementation
 
-| Middleware | Directory | Status |
-|---|---|---|
-| RTI Connext DDS | [`connext_dds/`](connext_dds/) | Complete (Python) |
-| gRPC | — | Planned |
-| Kafka | — | Planned |
+Built with RTI Connext DDS (Python). See [`connext_dds/`](connext_dds/) for the full implementation.
 
-## Quick Start (Connext DDS)
+## Quick Start
 
 ```bash
 # Set up virtual environment and install dependencies
@@ -89,9 +89,8 @@ See [`connext_dds/README.md`](connext_dds/README.md) for prerequisites, detailed
 ```
 ├── README.md                      # This file
 ├── setup.sourceme                 # Environment setup (source, not execute)
-├── requirements/                  # Python dependencies
-│   ├── common.txt
-│   └── connext_dds.txt
+├── requirements/
+│   └── connext_dds.txt            # Python dependencies
 ├── connext_dds/                   # RTI Connext DDS implementation
 │   ├── README.md                  # Approach overview & quick start
 │   ├── DESIGN.md                  # DDS architecture deep dive
@@ -108,7 +107,7 @@ See [`connext_dds/README.md`](connext_dds/README.md) for prerequisites, detailed
 
 ## How We Built This
 
-This project was designed iteratively using AI tools with and without [RTI's Connext MCP server](https://chatbot.rti.com/docs/getting-started). The [`docs/design_process/`](docs/design_process/) directory documents this journey, including prompts, design iterations, and a comparison of MCP vs non-MCP approaches.
+This project was designed iteratively using AI tools with and without [RTI's Connext AI Design Expert (Connext MCP server)](https://chatbot.rti.com/docs/getting-started). The [`docs/design_process/`](docs/design_process/) directory documents this journey, including prompts, design iterations, and a comparison of using Connext AI Design Expert vs no Expert approaches.
 
 ## License
 

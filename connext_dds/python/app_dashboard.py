@@ -737,9 +737,10 @@ tr.selected td { background: rgba(78,168,222,0.18); }
 
 /* ── Aircraft label on map ───────────────────────────────────────────── */
 .aircraft-label {
-  background: rgba(15,17,23,0.85); color: #fff; padding: 2px 6px;
-  border-radius: 4px; font-size: 11px; font-weight: 600; white-space: nowrap;
-  border: 1px solid rgba(78,168,222,0.4); pointer-events: none;
+  color: #e0e0e0; padding: 1px 3px;
+  font-size: 11px; font-weight: 600; white-space: nowrap;
+  font-family: "Courier New", Courier, monospace;
+  text-shadow: 0 0 4px #000, 0 0 4px #000; pointer-events: none;
 }
 
 /* ── Airport icon on map ─────────────────────────────────────────────── */
