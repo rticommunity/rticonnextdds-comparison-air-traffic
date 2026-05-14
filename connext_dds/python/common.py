@@ -268,6 +268,25 @@ def load_qos_provider(qos_file: str | None = None) -> dds.QosProvider:
     return dds.QosProvider(path)
 
 
+_monitoring_enabled = False
+
+
+def _enable_monitoring(qos_provider: dds.QosProvider) -> None:
+    """Enable Connext Monitoring 2.0 on the DomainParticipantFactory (once).
+
+    Loads the Monitoring2FactoryProfile from the QoS XML and applies it
+    to the factory singleton.
+    """
+    global _monitoring_enabled
+    if _monitoring_enabled:
+        return
+    factory_qos = qos_provider.participant_factory_qos_from_profile(
+        f"{QOS_LIB}::Monitoring2FactoryProfile"
+    )
+    dds.DomainParticipant.participant_factory_qos = factory_qos
+    _monitoring_enabled = True
+
+
 def create_participant(
     qos_provider: dds.QosProvider,
     domain_id: int = DOMAIN_ID,
@@ -275,6 +294,7 @@ def create_participant(
     participant_name: str | None = None,
     app_name: str | None = None,
 ) -> dds.DomainParticipant:
+    _enable_monitoring(qos_provider)
     participant_qos = qos_provider.participant_qos_from_profile(
         f"{QOS_LIB}::AtcParticipantProfile"
     )

@@ -463,5 +463,18 @@
             </datawriter_qos>
         </qos_profile>
 
+        <!--
+            Monitoring2FactoryProfile
+            Enables Connext Monitoring Library 2.0 on the
+            DomainParticipantFactory so that a dedicated participant
+            publishes application telemetry data.
+            Applied programmatically in Python via common._enable_monitoring().
+        -->
+        <qos_profile name="Monitoring2FactoryProfile">
+            <base_name>
+                <element>BuiltinQosSnippetLib::Feature.Monitoring2.Enable</element>
+            </base_name>
+        </qos_profile>
+
     </qos_library>
 </dds>
