@@ -1,0 +1,5 @@
+grpcio
+grpcio-tools
+protobuf
+zeroconf
+flask>=3.0

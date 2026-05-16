@@ -13,7 +13,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$SCRIPT_DIR"
 VENV_DIR="$PROJECT_DIR/venv"
-REQUIREMENTS="$PROJECT_DIR/requirements/connext_dds.txt"
+REQUIREMENTS_DDS="$PROJECT_DIR/requirements/connext_dds.txt"
+REQUIREMENTS_GRPC="$PROJECT_DIR/requirements/grpc.txt"
 
 # ── Determine Python version ───────────────────────────────────────────────
 PYTHON="${PYTHON:-python3}"
@@ -34,8 +35,11 @@ source "$VENV_DIR/bin/activate"
 echo "Upgrading pip..."
 pip install --upgrade pip --quiet
 
-echo "Installing requirements (includes rti.connext from PyPI)..."
-pip install -r "$REQUIREMENTS" --quiet
+echo "Installing requirements (Connext DDS)..."
+pip install -r "$REQUIREMENTS_DDS" --quiet
+
+echo "Installing requirements (gRPC)..."
+pip install -r "$REQUIREMENTS_GRPC" --quiet
 
 echo ""
 echo "============================================"

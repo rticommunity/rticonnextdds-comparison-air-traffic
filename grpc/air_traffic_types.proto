@@ -1,0 +1,428 @@
+// SPDX-FileCopyrightText: 2026 Real-Time Innovations, Inc.
+// SPDX-License-Identifier: Apache-2.0
+//
+// Protocol Buffers + gRPC service definitions for the National ATC demo.
+// Mirrors the DDS IDL in connext_dds/air_traffic_types.idl.
+
+syntax = "proto3";
+
+package national_air_traffic_control;
+
+import "google/protobuf/timestamp.proto";
+
+// ─── Helper Messages ───────────────────────────────────────
+
+message GeoPosition {
+    double latitude = 1;
+    double longitude = 2;
+    double altitude_feet = 3;
+}
+
+message Wind {
+    uint32 direction_degrees = 1;
+    float speed_knots = 2;
+    optional float gust_knots = 3;
+}
+
+message Waypoint {
+    string name = 1;                              // max 16 chars
+    GeoPosition position = 2;
+    optional google.protobuf.Timestamp estimated_time = 3;
+}
+
+message GateAssignment {
+    string flight_id = 1;                         // tail_number
+    string gate_name = 2;                         // max 16 chars
+    GateAssignmentStatusKind status = 3;
+    google.protobuf.Timestamp assignment_timestamp = 4;
+    optional string message = 5;                  // max 256 chars
+}
+
+// ─── Enumerations ──────────────────────────────────────────
+// Proto3 requires the first value to be 0. An UNKNOWN sentinel is
+// added to each enum; it has no IDL equivalent but is needed for
+// wire-compatibility and zero-value semantics.
+
+enum FlightPhase {
+    FLIGHT_PHASE_UNKNOWN = 0;
+    PREFLIGHT = 1;
+    TAXI_OUT = 2;
+    TAKEOFF = 3;
+    CLIMB = 4;
+    CRUISE = 5;
+    DESCENT = 6;
+    APPROACH = 7;
+    LANDING = 8;
+    TAXI_IN = 9;
+    PARKED = 10;
+    HOLDING = 11;
+}
+
+enum InstructionType {
+    INSTRUCTION_TYPE_UNKNOWN = 0;
+    HEADING = 1;
+    ALTITUDE = 2;
+    SPEED = 3;
+    CLEARANCE = 4;
+    HOLD = 5;
+    GO_AROUND = 6;
+    TAXI = 7;
+    PUSHBACK = 8;
+}
+
+enum AcknowledgmentStatus {
+    ACKNOWLEDGMENT_STATUS_UNKNOWN = 0;
+    RECEIVED = 1;
+    WILCO = 2;
+    UNABLE = 3;
+    READBACK_CORRECT = 4;
+    READBACK_INCORRECT = 5;
+}
+
+enum FlightPlanStatus {
+    FLIGHT_PLAN_STATUS_UNKNOWN = 0;
+    FILED = 1;
+    ACTIVE = 2;
+    AMENDED = 3;
+    DELAYED = 4;
+    CANCELLED = 5;
+    COMPLETED = 6;
+}
+
+enum RunwayOperationalStatus {
+    RUNWAY_STATUS_UNKNOWN = 0;
+    OPEN = 1;
+    CLOSED = 2;
+    OCCUPIED = 3;
+}
+
+enum WeatherCondition {
+    WEATHER_CONDITION_UNKNOWN = 0;
+    VMC = 1;
+    IMC = 2;
+    RAIN = 3;
+    SNOW = 4;
+    FOG = 5;
+    THUNDERSTORM = 6;
+    WIND_SHEAR = 7;
+    ICE = 8;
+}
+
+enum HandoffStatus {
+    HANDOFF_STATUS_UNKNOWN = 0;
+    INITIATED = 1;
+    ACCEPTED = 2;
+    REJECTED = 3;
+    HANDOFF_COMPLETED = 4;  // "COMPLETED" conflicts with FlightPlanStatus
+    HANDOFF_CANCELLED = 5;
+}
+
+enum AlertSeverity {
+    ALERT_SEVERITY_UNKNOWN = 0;
+    INFO = 1;
+    CAUTION = 2;
+    WARNING = 3;
+    CRITICAL = 4;
+}
+
+enum AlertType {
+    ALERT_TYPE_UNKNOWN = 0;
+    EMERGENCY = 1;
+    TRAFFIC_CONFLICT = 2;
+    WEATHER_HAZARD = 3;
+    RUNWAY_INCURSION = 4;
+    COMMUNICATION_LOSS = 5;
+    SYSTEM_FAILURE = 6;
+    UNAUTHORIZED_ENTRY = 7;
+    WEATHER_DEVIATION = 8;
+}
+
+enum ConvectiveSeverity {
+    CONVECTIVE_SEVERITY_UNKNOWN = 0;
+    MODERATE = 1;
+    SEVERE = 2;
+    EXTREME = 3;
+}
+
+enum FacilityType {
+    FACILITY_TYPE_UNKNOWN = 0;
+    TOWER = 1;
+    TRACON = 2;
+    CENTER = 3;
+    NATIONAL = 4;
+}
+
+enum GateAssignmentStatusKind {
+    GATE_STATUS_UNKNOWN = 0;
+    PENDING = 1;
+    ASSIGNED = 2;
+    GATE_REJECTED = 3;     // "REJECTED" conflicts with HandoffStatus
+    RELEASED = 4;
+}
+
+enum NavStatus {
+    NAV_STATUS_UNKNOWN = 0;
+    NORMAL = 1;
+    NAV_WEATHER_DEVIATION = 2;  // "WEATHER_DEVIATION" conflicts with AlertType
+    NAV_HOLDING = 3;            // "HOLDING" conflicts with FlightPhase
+    NAV_EMERGENCY = 4;          // "EMERGENCY" conflicts with AlertType
+}
+
+// ─── Topic Messages ────────────────────────────────────────
+// Each message corresponds to a DDS @topic struct. Key fields are
+// annotated in comments; gRPC has no native @key concept.
+
+// Key: tail_number
+message AircraftPosition {
+    string tail_number = 1;                       // max 16 chars
+    string callsign = 2;                          // max 16 chars
+    GeoPosition position = 3;
+    float ground_speed_knots = 4;
+    float vertical_speed_fpm = 5;
+    float heading_degrees = 6;
+    FlightPhase flight_phase = 7;
+    string origin_airport = 8;                    // max 8 chars
+    string destination_airport = 9;               // max 8 chars
+    float fuel_level_percent = 10;
+    optional string assigned_runway = 11;         // max 16 chars
+    optional string assigned_gate = 12;           // max 16 chars
+    optional NavStatus nav_status = 13;
+    google.protobuf.Timestamp timestamp = 14;
+}
+
+// Key: instruction_id
+message ControllerInstruction {
+    string instruction_id = 1;                    // max 64 chars
+    string controller_id = 2;                     // max 32 chars
+    string tail_number = 3;                       // max 16 chars
+    InstructionType instruction_type = 4;
+    optional float assigned_heading_degrees = 5;
+    optional int32 assigned_altitude_feet = 6;
+    optional float assigned_speed_knots = 7;
+    optional string clearance_text = 8;           // max 256 chars
+    optional string taxi_route = 9;               // max 256 chars
+    optional string hold_reason = 10;             // max 256 chars
+    google.protobuf.Timestamp issued_at = 11;
+}
+
+// Key: acknowledgment_id
+message PilotAcknowledgment {
+    string acknowledgment_id = 1;                 // max 64 chars
+    string instruction_id = 2;                    // max 64 chars
+    string tail_number = 3;                       // max 16 chars
+    AcknowledgmentStatus status = 4;
+    optional string response_text = 5;            // max 256 chars
+    google.protobuf.Timestamp acknowledged_at = 6;
+}
+
+// Key: flight_plan_id
+message FlightPlan {
+    string flight_plan_id = 1;                    // max 64 chars
+    string tail_number = 2;                       // max 16 chars
+    string callsign = 3;                          // max 16 chars
+    string departure_airport = 4;                 // max 8 chars
+    string arrival_airport = 5;                   // max 8 chars
+    repeated Waypoint waypoints = 6;              // max 128
+    google.protobuf.Timestamp scheduled_departure_time = 7;
+    optional google.protobuf.Timestamp estimated_departure_time = 8;
+    optional google.protobuf.Timestamp scheduled_arrival_time = 9;
+    optional google.protobuf.Timestamp estimated_arrival_time = 10;
+    FlightPlanStatus status = 11;
+    google.protobuf.Timestamp last_updated = 12;
+}
+
+// Key: airport_code + runway_id
+message RunwayStatus {
+    string airport_code = 1;                      // max 8 chars
+    string runway_id = 2;                         // max 16 chars
+    RunwayOperationalStatus status = 3;
+    optional string remarks = 4;                  // max 256 chars
+    google.protobuf.Timestamp timestamp = 5;
+}
+
+// Key: airport_code
+message WeatherReport {
+    string airport_code = 1;                      // max 8 chars
+    Wind wind = 2;
+    float visibility_meters = 3;
+    int32 ceiling_feet = 4;
+    float temperature_celsius = 5;
+    float altimeter_hpa = 6;
+    WeatherCondition conditions = 7;
+    google.protobuf.Timestamp observation_time = 8;
+}
+
+// Key: handoff_id
+message Handoff {
+    string handoff_id = 1;                        // max 64 chars
+    string tail_number = 2;                       // max 16 chars
+    string from_controller_id = 3;                // max 32 chars
+    string to_controller_id = 4;                  // max 32 chars
+    HandoffStatus status = 5;
+    optional FacilityType from_facility_type = 6;
+    optional FacilityType to_facility_type = 7;
+    optional string sector = 8;                   // max 256 chars
+    optional string frequency = 9;                // max 256 chars
+    google.protobuf.Timestamp initiated_at = 10;
+    optional google.protobuf.Timestamp completed_at = 11;
+}
+
+// Key: alert_id
+message Alert {
+    string alert_id = 1;                          // max 64 chars
+    AlertType alert_type = 2;
+    AlertSeverity severity = 3;
+    repeated string involved_aircraft = 4;        // max 16 tail_numbers
+    optional string airport_code = 5;             // max 8 chars
+    optional string runway_id = 6;                // max 16 chars
+    string message = 7;                           // max 256 chars
+    google.protobuf.Timestamp timestamp = 8;
+}
+
+// Key: tail_number
+message AircraftTracking {
+    string tail_number = 1;                       // max 16 chars
+    string controller_id = 2;                     // max 32 chars
+    string facility_id = 3;                       // e.g. "ZNY", "N90", "KJFK"
+    FacilityType facility_type = 4;
+    google.protobuf.Timestamp acquired_at = 5;
+}
+
+// Key: facility_id
+message FacilityStatus {
+    string facility_id = 1;                       // e.g. "ZNY", "N90", "KJFK"
+    FacilityType facility_type = 2;
+    string controller_id = 3;                     // max 32 chars
+    uint32 tracked_aircraft_count = 4;
+    google.protobuf.Timestamp last_updated = 5;
+}
+
+// Key: cell_id
+message ConvectiveCell {
+    string cell_id = 1;                           // max 64 chars
+    double center_latitude = 2;
+    double center_longitude = 3;
+    double radius_nm = 4;
+    int32 top_altitude_ft = 5;
+    int32 base_altitude_ft = 6;
+    ConvectiveSeverity severity = 7;
+    float movement_heading_deg = 8;
+    float movement_speed_knots = 9;
+    google.protobuf.Timestamp observation_time = 10;
+}
+
+// ─── Request/Reply Messages ────────────────────────────────
+
+message FlightPlanRequest {
+    FlightPlan plan = 1;
+}
+
+message FlightPlanResponse {
+    string flight_plan_id = 1;                    // max 64 chars
+    bool accepted = 2;
+    optional string message = 3;                  // max 256 chars
+    google.protobuf.Timestamp response_timestamp = 4;
+}
+
+message GateRequest {
+    string flight_id = 1;                         // tail_number
+    string aerodrome_id = 2;                      // airport code
+    google.protobuf.Timestamp requested_timestamp = 3;
+    bool requires_assignment = 4;
+}
+
+message GateAssignmentReply {
+    string flight_id = 1;                         // tail_number
+    GateAssignment assignment = 2;
+}
+
+// ─── Subscription Filter Messages ──────────────────────────
+// These are used as request messages for server-streaming subscribe RPCs.
+// Each contains filter fields corresponding to DDS Content-Filtered Topics.
+
+message ControllerInstructionFilter {
+    string tail_number = 1;                       // receive only instructions for this aircraft
+}
+
+message WeatherReportFilter {
+    optional string airport_code = 1;             // specific airport or all
+}
+
+message HandoffFilter {
+    string controller_id = 1;                     // to_controller_id OR from_controller_id
+}
+
+// Generic empty request for unfiltered subscriptions
+message EmptyFilter {}
+
+// ─── Handoff Acknowledgment ────────────────────────────────
+
+message HandoffAck {
+    bool success = 1;
+    optional string message = 2;
+}
+
+// ─── gRPC Service Definitions ──────────────────────────────
+// Each application that produces data runs its own gRPC server.
+// Consumers connect directly to the servers they need.
+
+// AircraftService — hosted by each airplane process.
+service AircraftService {
+    rpc StreamPositions(EmptyFilter) returns (stream AircraftPosition);
+    rpc StreamAcknowledgments(EmptyFilter) returns (stream PilotAcknowledgment);
+}
+
+// TowerService — hosted by each control tower.
+service TowerService {
+    rpc StreamInstructions(ControllerInstructionFilter) returns (stream ControllerInstruction);
+    rpc StreamHandoffs(HandoffFilter) returns (stream Handoff);
+    rpc StreamAlerts(EmptyFilter) returns (stream Alert);
+    rpc StreamTracking(EmptyFilter) returns (stream AircraftTracking);
+    rpc StreamFacilityStatus(EmptyFilter) returns (stream FacilityStatus);
+    rpc StreamRunwayStatus(EmptyFilter) returns (stream RunwayStatus);
+    rpc SendHandoff(Handoff) returns (HandoffAck);
+}
+
+// TraconService — hosted by each TRACON facility.
+service TraconService {
+    rpc StreamInstructions(ControllerInstructionFilter) returns (stream ControllerInstruction);
+    rpc StreamHandoffs(HandoffFilter) returns (stream Handoff);
+    rpc StreamAlerts(EmptyFilter) returns (stream Alert);
+    rpc StreamTracking(EmptyFilter) returns (stream AircraftTracking);
+    rpc StreamFacilityStatus(EmptyFilter) returns (stream FacilityStatus);
+    rpc SendHandoff(Handoff) returns (HandoffAck);
+}
+
+// CenterService — hosted by each en-route center.
+service CenterService {
+    rpc StreamInstructions(ControllerInstructionFilter) returns (stream ControllerInstruction);
+    rpc StreamHandoffs(HandoffFilter) returns (stream Handoff);
+    rpc StreamAlerts(EmptyFilter) returns (stream Alert);
+    rpc StreamTracking(EmptyFilter) returns (stream AircraftTracking);
+    rpc StreamFacilityStatus(EmptyFilter) returns (stream FacilityStatus);
+    rpc SendHandoff(Handoff) returns (HandoffAck);
+}
+
+// AirportService — hosted by each airport.
+service AirportService {
+    rpc StreamWeatherReports(WeatherReportFilter) returns (stream WeatherReport);
+    rpc StreamRunwayStatus(EmptyFilter) returns (stream RunwayStatus);
+    rpc RequestGate(GateRequest) returns (stream GateAssignmentReply);
+}
+
+// FlightPlanService — single standalone server for flight plan filing.
+service FlightPlanService {
+    rpc FileFlightPlan(FlightPlanRequest) returns (FlightPlanResponse);
+    rpc StreamFlightPlans(EmptyFilter) returns (stream FlightPlan);
+}
+
+// WeatherService — single standalone server for en-route weather.
+service WeatherService {
+    rpc StreamConvectiveCells(EmptyFilter) returns (stream ConvectiveCell);
+    rpc InjectCell(ConvectiveCell) returns (CellInjectionAck);
+}
+
+message CellInjectionAck {
+    bool accepted = 1;
+    string cell_id = 2;
+}
