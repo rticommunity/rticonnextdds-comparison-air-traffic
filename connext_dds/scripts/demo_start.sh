@@ -25,7 +25,7 @@
 # Examples:
 #   ./demo_start.sh all
 #   ./demo_start.sh all --duration 120
-#   ./demo_start.sh all --config air_traffic_scenario.json
+#   ./demo_start.sh all --config ../../air_traffic_scenario.json
 #   ./demo_start.sh flightplan
 #   ./demo_start.sh airport --airport-code KJFK
 #   ./demo_start.sh tower --airport-code KLAX
@@ -50,6 +50,21 @@ if [[ -n "${NDDSHOME:-}" ]]; then
     esac
 fi
 # RTI_LICENSE_FILE can also be set directly without NDDSHOME
+if [[ -z "${RTI_LICENSE_FILE:-}" ]]; then
+    echo "ERROR: RTI_LICENSE_FILE is not set."
+    echo "       Either set NDDSHOME or export RTI_LICENSE_FILE directly."
+    exit 1
+fi
+if [[ ! -f "$RTI_LICENSE_FILE" ]]; then
+    echo "ERROR: License file not found: $RTI_LICENSE_FILE"
+    exit 1
+fi
+
+# ── QoS profiles visible to the default QosProvider ────────────────────────
+# The Monitoring Library 2.0 resolves participant_qos_profile_name via the
+# default/global QosProvider.  NDDS_QOS_PROFILES ensures our XML is loaded
+# into that provider so the MonitoringUdpOnlyParticipant profile is found.
+export NDDS_QOS_PROFILES="file://$PROJECT_DIR/air_traffic_qos.xml"
 
 # ── Python from project venv ───────────────────────────────────────────────
 PYTHON="${PYTHON:-$REPO_DIR/venv/bin/python3}"
@@ -60,7 +75,7 @@ if [[ ! -x "$PYTHON" ]]; then
 fi
 
 DURATION=""
-SCENARIO_CONFIG="$PROJECT_DIR/air_traffic_scenario.json"
+SCENARIO_CONFIG="$REPO_DIR/air_traffic_scenario.json"
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
 

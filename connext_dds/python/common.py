@@ -265,26 +265,14 @@ def load_qos_provider(qos_file: str | None = None) -> dds.QosProvider:
     path = qos_file or QOS_FILE
     if not path:
         raise ValueError("QOS_FILE not set — pass --qos-file or set common.QOS_FILE")
-    return dds.QosProvider(path)
-
-
-_monitoring_enabled = False
-
-
-def _enable_monitoring(qos_provider: dds.QosProvider) -> None:
-    """Enable Connext Monitoring 2.0 on the DomainParticipantFactory (once).
-
-    Loads the Monitoring2FactoryProfile from the QoS XML and applies it
-    to the factory singleton.
-    """
-    global _monitoring_enabled
-    if _monitoring_enabled:
-        return
-    factory_qos = qos_provider.participant_factory_qos_from_profile(
-        f"{QOS_LIB}::Monitoring2FactoryProfile"
-    )
-    dds.DomainParticipant.participant_factory_qos = factory_qos
-    _monitoring_enabled = True
+    abs_path = os.path.abspath(path)
+    # If NDDS_QOS_PROFILES already loaded this file into the default
+    # provider (set by demo_start.sh), reuse it to avoid duplicate-profile
+    # errors.  Otherwise create an explicit provider.
+    ndds_profiles = os.environ.get("NDDS_QOS_PROFILES", "")
+    if abs_path in ndds_profiles:
+        return dds.QosProvider.default
+    return dds.QosProvider(abs_path)
 
 
 def create_participant(
@@ -294,7 +282,6 @@ def create_participant(
     participant_name: str | None = None,
     app_name: str | None = None,
 ) -> dds.DomainParticipant:
-    _enable_monitoring(qos_provider)
     participant_qos = qos_provider.participant_qos_from_profile(
         f"{QOS_LIB}::AtcParticipantProfile"
     )

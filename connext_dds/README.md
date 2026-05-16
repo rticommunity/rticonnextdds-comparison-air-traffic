@@ -23,7 +23,6 @@ connext_dds/
 ├── DESIGN.md                      # DDS architecture deep dive
 ├── air_traffic_types.idl          # IDL4 type definitions (source of truth)
 ├── air_traffic_qos.xml            # QoS profile library
-├── air_traffic_scenario.json      # Scenario config: airports, aircraft, centers
 ├── diagrams/                      # Design diagrams (referenced by DESIGN.md)
 ├── scripts/
 │   ├── demo_start.sh              # Launch all apps

@@ -35,7 +35,8 @@ RUN pip install --no-cache-dir -r requirements/connext_dds.txt
 # Copy project files
 COPY connext_dds/python/ connext_dds/python/
 COPY connext_dds/scripts/ connext_dds/scripts/
-COPY connext_dds/air_traffic_qos.xml connext_dds/air_traffic_scenario.json connext_dds/
+COPY air_traffic_scenario.json .
+COPY connext_dds/air_traffic_qos.xml connext_dds/
 COPY docker/docker-entrypoint.sh .
 
 # Dashboard port

@@ -556,6 +556,7 @@ def main():
         config_path=args.config,
     )
     airplane.run(duration_s=args.duration)
+    airplane.participant.close()
 
 
 if __name__ == "__main__":

@@ -558,6 +558,7 @@ def main():
         config_path=args.config,
     )
     tracon.run(duration_s=args.duration)
+    tracon.participant.close()
 
 
 if __name__ == "__main__":

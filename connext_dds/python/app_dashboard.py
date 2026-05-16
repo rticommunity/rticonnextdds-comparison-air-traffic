@@ -1837,6 +1837,7 @@ def main():
 
     print(f"Dashboard running at http://localhost:{args.port}")
     app.run(host=args.host, port=args.port, threaded=True)
+    participant.close()
 
 
 if __name__ == "__main__":

@@ -157,6 +157,7 @@ def main():
 
     svc = FlightPlanService(service_name=args.service_name)
     svc.run(duration_s=args.duration)
+    svc.participant.close()
 
 
 if __name__ == "__main__":

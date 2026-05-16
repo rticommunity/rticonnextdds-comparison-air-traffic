@@ -92,7 +92,7 @@ Adjacent layers discover each other via the "reach up" overlap:
 - Airplane ↔ Tower KJFK (match on `OPS/AIRPORT/KJFK`)
 - Airplane ↔ TRACON N90 (airplane `OPS/TERMINAL/*` matches `OPS/TERMINAL/N90`)
 
-Each airport's `serving_tracon` and each TRACON's `serving_center` are configured in [`air_traffic_scenario.json`](air_traffic_scenario.json). The script [`scripts/demo_start.sh`](scripts/demo_start.sh) derives each TRACON's airport list by scanning airports with matching `serving_tracon`.
+Each airport's `serving_tracon` and each TRACON's `serving_center` are configured in [`air_traffic_scenario.json`](../air_traffic_scenario.json). The script [`scripts/demo_start.sh`](scripts/demo_start.sh) derives each TRACON's airport list by scanning airports with matching `serving_tracon`.
 
 #### Concrete Example — Flight KJFK → KLAX
 
@@ -732,7 +732,6 @@ Aircraft do **not** subscribe to the `Handoff` topic. They are entirely passive 
 connext_dds/
 ├── air_traffic_types.idl            # IDL4 type definitions (source of truth)
 ├── air_traffic_qos.xml              # QoS profile library
-├── air_traffic_scenario.json        # Airports, TRACONs, centers, aircraft, initial_speed
 ├── diagrams/
 │   ├── ATC_Partitions.mermaid
 │   ├── ATC_Partitions.svg

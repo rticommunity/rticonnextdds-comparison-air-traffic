@@ -37,7 +37,7 @@ All apps require `--config` and `--qos-file` arguments:
 
 ```bash
 python app_airport.py \
-    --config ../air_traffic_scenario.json \
+    --config ../../air_traffic_scenario.json \
     --qos-file ../air_traffic_qos.xml \
     --airport-code KJFK
 ```

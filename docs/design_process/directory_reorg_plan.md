@@ -18,7 +18,7 @@ Prepare rticonnextdds-comparison-air-traffic for GitHub under rticommunity. Supp
 - IDL file named `air_traffic_types.idl` (clarifies it defines types)
 - Python app files use `app_` prefix (e.g., `app_airplane.py`) to distinguish from support files
 - Demo chain uses `demo_` prefix: `demo_cli.py` (parser), `demo_start.sh`/`demo_stop.sh` (launchers)
-- Scenario config named `air_traffic_scenario.json` (matches `air_traffic_types.idl`, `air_traffic_qos.xml`) and lives at `connext_dds/` level (not in scripts/) because it defines the simulation topology consumed by all apps via `common.py`
+- Scenario config named `air_traffic_scenario.json` (matches `air_traffic_types.idl`, `air_traffic_qos.xml`) and lives at the **repo root** because it is shared across all implementations (connext_dds, grpc, etc.)
 - `types_generate.sh` stays per-language (calls rtiddsgen with language-specific flags, output goes into language dir)
 - `common.py` does not hardcode file paths — apps receive config/qos paths via CLI args; demo_start.sh passes them when launching
 
@@ -35,7 +35,7 @@ Prepare rticonnextdds-comparison-air-traffic for GitHub under rticommunity. Supp
 | DDS architecture (domains, partitions, topics, QoS, CFTs, data flows, fault tolerance) | Yes | `connext_dds/DESIGN.md` |
 | Design diagrams (partition graphs, data flow diagrams) | Yes | `connext_dds/diagrams/` |
 | IDL, QoS XML | Yes | `connext_dds/` |
-| Demo scenario config | Yes (shared across languages) | `connext_dds/air_traffic_scenario.json` |
+| Demo scenario config | Yes (shared across implementations) | `air_traffic_scenario.json` (repo root) |
 | Demo/collector scripts, demo_cli.py | Cross-cutting | `connext_dds/scripts/` |
 | Type generation scripts | No (language-specific flags) | `connext_dds/<lang>/` |
 | Component implementation specs | No | `connext_dds/<lang>/spec/` |
@@ -51,6 +51,8 @@ rticonnextdds-comparison-air-traffic/
 ├── setup.sourceme                 # Environment setup (source, not execute)
 ├── .gitignore
 │
+├── air_traffic_scenario.json       # Scenario config (shared across all implementations)
+│
 ├── connext_dds/                   # Pure Connext DDS approach
 │   ├── README.md                  # Approach overview, file inventory, quick start
 │   ├── DESIGN.md                  # DDS architecture: partitions, QoS, CFTs, data flows
@@ -59,7 +61,6 @@ rticonnextdds-comparison-air-traffic/
 │   │   └── ATC_Partitions.svg
 │   ├── air_traffic_types.idl      # Shared IDL (source of truth, all languages)
 │   ├── air_traffic_qos.xml        # Shared QoS profiles (all languages)
-│   ├── air_traffic_scenario.json  # Scenario config: airports, aircraft, centers, duration
 │   │
 │   ├── scripts/                   # Demo & operational scripts (first thing users find)
 │   │   ├── demo_start.sh          # Launch all apps (rename to demo_python_start.sh when C++ added)

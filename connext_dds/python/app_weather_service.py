@@ -263,6 +263,7 @@ def main():
         publish_interval_s=args.publish_interval,
     )
     svc.run(duration_s=args.duration)
+    svc.participant.close()
 
 
 if __name__ == "__main__":

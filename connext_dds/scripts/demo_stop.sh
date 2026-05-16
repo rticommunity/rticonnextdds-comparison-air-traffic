@@ -83,5 +83,34 @@ done
 if (( killed == 0 )); then
     echo "No matching ATC demo processes found."
 else
-    echo "Stopped $killed process(es)."
+    echo "Sent SIGTERM to $killed process(es). Waiting up to 5s for clean exit..."
+    sleep 5
+    # Escalate to SIGKILL for any survivors (DDS monitoring cleanup can hang
+    # when shared-memory resources are exhausted).
+    survivors=0
+    for entry in "${searches[@]}"; do
+        pattern="${entry%%|*}"
+        instance="${entry#*|}"
+        if [[ -n "$instance" ]]; then
+            pids=$(pgrep -f "$pattern" 2>/dev/null | while read -r pid; do
+                if ps -p "$pid" -o args= 2>/dev/null | grep -q "$instance"; then
+                    echo "$pid"
+                fi
+            done)
+        else
+            pids=$(pgrep -f "$pattern" 2>/dev/null || true)
+        fi
+        if [[ -n "$pids" ]]; then
+            for pid in $pids; do
+                echo "Force-killing PID $pid (did not exit after SIGTERM)"
+                kill -9 "$pid" 2>/dev/null || true
+                ((survivors++))
+            done
+        fi
+    done
+    if (( survivors > 0 )); then
+        echo "Force-killed $survivors stubborn process(es)."
+    else
+        echo "All processes exited cleanly."
+    fi
 fi

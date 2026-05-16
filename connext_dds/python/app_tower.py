@@ -446,6 +446,7 @@ def main():
         serving_tracon=serving_tracon,
     )
     tower.run(duration_s=args.duration)
+    tower.participant.close()
 
 
 if __name__ == "__main__":

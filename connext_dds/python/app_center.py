@@ -875,6 +875,7 @@ def main():
         config_path=args.config,
     )
     center.run(duration_s=args.duration)
+    center.participant.close()
 
 
 if __name__ == "__main__":

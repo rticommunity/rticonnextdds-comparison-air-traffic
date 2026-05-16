@@ -1,7 +1,7 @@
 {
   "scenario": "US National ATC Demo",
   "duration_seconds": 3600,
-  "initial_speed": 10.1,
+  "initial_speed": 10.0,
   "airports": [
     {
       "code": "KJFK",
