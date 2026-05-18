@@ -83,111 +83,165 @@ Built with RTI Connext DDS (Python). See [`connext_dds/`](connext_dds/) for the 
 
 Built with gRPC + Protocol Buffers (Python). See [`grpc/`](grpc/) for the full implementation.
 
-## Comparison: What the Resulting Applications Can Do
+## Comparison: How Do the Resulting Systems Differ?
 
-Both implementations produce the same ATC demo with the same 8 application roles — but the resulting systems differ significantly in what they deliver out of the box. The code can be written by AI in either case; what matters is the **capabilities, robustness, and scalability** of the running application.
+Both implementations produce the same ATC demo — but deploying them in a realistic airspace reveals fundamental differences in robustness, scalability, and extensibility. Writing the code is straightforward in either case (especially with AI assistance); what matters is what the **running system** delivers.
 
-### Discovery: How Do Applications Find Each Other?
+### At Realistic Scale
+
+The US national airspace handles ~5,000 aircraft simultaneously across ~20 en-route centers, ~180 TRACONs, and ~500 towered airports. The differences between the two architectures compound as the system grows.
+
+#### Connection and thread explosion
+
+In gRPC, every consumer-producer relationship is a dedicated TCP stream with its own thread. In DDS, a DataReader receives from all matched writers regardless of how many there are.
+
+| Scenario | gRPC | DDS |
+|---|---|---|
+| Center tracking 250 aircraft (positions only) | 250 TCP streams + 250 threads | 1 DataReader |
+| 20 centers × 250 aircraft | ~5,000 position streams system-wide | 20 DataReaders total |
+| Add a dashboard observing all centers | +20 streams per data type | +1 DataReader per topic |
+| **Full NAS: 5,000 aircraft, 700 facilities** | **Hundreds of thousands of TCP streams**, each with a thread, TCP socket, and keepalive overhead | **Each writer calls `write()` once** — middleware delivers to matched readers. Thread and connection count are independent of how many producers exist |
+
+At demo scale (10 aircraft, 34 facilities) this may be acceptable. At production scale, the gRPC system is managing orders of magnitude more OS resources — sockets, threads, memory buffers — than the DDS system, all in application code.
+
+#### Cascading failure amplification
+
+This is arguably more consequential than the connection count. When a single aircraft server crashes in gRPC, every facility that was streaming from it gets a simultaneous exception — 20+ threads across the system hit errors at once, each must independently retry with its own backoff. When a center restarts, hundreds of streams die simultaneously.
+
+In DDS, the middleware detects the liveliness loss once and notifies each reader via callback — no connection teardown, no thread cleanup, no retry loops. When the crashed participant restarts, re-discovery is automatic.
+
+A 30-second network partition doesn't just break the streams between the affected regions — it breaks every stream that traverses the affected link. In gRPC, each of those streams recovers independently on its own retry schedule; the system may take minutes to fully reconverge. In DDS, the reliability protocol queues and retransmits automatically — for reliable data, the application doesn't even know the partition occurred.
+
+#### Fan-out bandwidth
+
+An aircraft publishing position at 5 Hz (~200 bytes per sample):
+
+| | gRPC | DDS |
+|---|---|---|
+| **Per aircraft, 34 interested facilities** | Server sends 34 copies (one per TCP stream) = ~34 KB/s | Application calls `write()` once = ~1 KB/s from the aircraft; on the wire, writer-side filters send only to the ~2-3 centers whose bounding box matches = ~2-3 KB/s |
+| **5,000 aircraft system-wide** | ~170 MB/s of position data alone | ~5 MB/s of application writes; ~12-15 MB/s on the wire after writer-side filtering |
+
+Writer-side content filtering is a key differentiator: DDS evaluates each subscriber's filter at the publisher, so data that no reader needs is never sent — reducing CPU use, bandwidth, and the number of network packets. In gRPC, the server sends to every connected stream regardless of whether the consumer needs the data, because there is no built-in mechanism to filter on the writer side.
+
+### Two Examples: Data-Centric vs. Point-to-Point
+
+The architectural difference shows up in both publish-subscribe flows and command flows. Here is how each implementation handles them, drawn directly from the code in this repo.
+
+#### Example 1 — Publishing position updates (pub-sub)
+
+An aircraft publishes its position at 5 Hz. Multiple facilities (centers, TRACONs, towers, dashboard) need to receive it.
+
+**DDS — data-centric:** The aircraft calls `write()` once on the `AircraftPosition` topic. The middleware delivers the sample to every matched reader — the application has no idea how many consumers exist or where they are. Each facility's reader has a content filter (e.g., a center filters by bounding box, a tower filters by tail number) evaluated at the *writer* side, so data that doesn't match never crosses the network. Adding a new consumer (say, a military coordinator filtering `altitude > 40000`) requires zero changes to the aircraft application — just a new reader with a new filter.
+
+**gRPC — point-to-point:** The aircraft runs a gRPC server exposing `StreamPositions`. Each facility discovers the aircraft via Zeroconf, opens a TCP stream, and receives positions on its own dedicated connection. The aircraft server sends the same data N times — once per connected stream. Server-side filtering is limited to simple key matches (tail number, airport code) that were anticipated at build time. Adding a new filter field (e.g., altitude threshold) requires changing the `.proto`, regenerating stubs, updating the aircraft server, and redeploying.
+
+**What this means at scale:** With 5,000 aircraft and 700 facilities, DDS: each aircraft calls `write()` once at 5 Hz — the middleware and network handle delivery. gRPC: hundreds of thousands of TCP streams, each managed by application code.
+
+#### Example 2 — Handing off an aircraft between centers (command)
+
+Center ZNY detects an aircraft leaving its airspace and needs to transfer control to Center ZLA.
+
+**DDS — data-centric:** ZNY writes a `Handoff` sample to the shared **Handoff topic** with `to_controller_id = "CTR-ZLA"` and `status = INITIATED`. This is a single `write()` — ZNY doesn't know or care where ZLA is on the network. ZLA has a content-filtered reader on the same topic (`to_controller_id = 'CTR-ZLA'`); the middleware delivers only matching samples. ZLA reads the INITIATED sample and writes an ACCEPTED sample back to the **same topic**. ZNY's filter picks it up. Every other observer (dashboard, supervisory tools) **automatically sees both samples** if their filter matches — all observers converge on the same state via `SHARED_OWNERSHIP` + `BY_SOURCE_TIMESTAMP`, with no additional code. Neither center opens a connection to the other. ZNY only needs to know ZLA's *controller ID* (a logical name), not its network address.
+
+**gRPC — point-to-point RPC:** ZNY calls `discovery.get_endpoint("center", "ZLA")` to look up ZLA's host:port from Zeroconf, opens a new TCP channel, and calls `stub.SendHandoff(ho, timeout=5)` — a blocking unary RPC. ZLA's handler accepts and returns `HandoffAck(success=True)`. If ZLA hasn't been discovered yet, the handoff fails (warning log, no retry). If the network dies mid-RPC, ZNY gets a timeout exception with no built-in reconciliation. Other observers (dashboard) don't see this exchange — they only see what each center publishes on its own broadcaster stream, which they must be separately subscribed to.
+
+**What this means operationally:** In DDS, a handoff is a write to a shared data space — the middleware handles delivery, filtering, and conflict resolution. In gRPC, a handoff is a direct call between two specific processes — the sender must know the receiver's address, manage the connection, handle failures, and every observer must independently subscribe to every center to get the full picture.
+
+### When Connectivity Is Temporarily Lost
+
+**Scenario:** A 30-second network partition between Center ZNY (New York) and Center ZLA (Los Angeles) while aircraft are being handed off between them.
 
 | | Connext DDS | gRPC |
 |---|---|---|
-| **Mechanism** | Automatic — UDP multicast discovery built into the middleware | Manual — Zeroconf/mDNS with application-level service registration |
-| **New app starts** | All existing apps discover it automatically within seconds | Zeroconf callback fires; each consumer must open a new stream |
-| **App restarts after crash** | Re-discovered automatically; readers resume receiving data | Must re-register with Zeroconf; consumers detect stream error, reconnect |
-| **WAN / cloud** | Unicast locator configuration | Requires external service registry (Consul, etcd, Kubernetes DNS) |
+| **Reliable data (handoffs, instructions)** | DDS queues unacknowledged samples at the writer. When connectivity resumes, the reliability protocol retransmits them automatically — no application code involved | All TCP streams die immediately. Every consumer hits an exception and must retry independently |
+| **Who controls the aircraft?** | Both centers may have written conflicting tracking updates during the partition. On reconnect, `BY_SOURCE_TIMESTAMP` ordering ensures **all readers converge on the newest update automatically** — the middleware resolves the conflict | If ZNY sent a `SendHandoff` RPC and the network died before ZLA's response arrived, ZNY timed out. ZLA may have already accepted. **The two centers now disagree on who controls the aircraft** — there is no middleware mechanism to reconcile |
+| **Position data** | Best-effort samples during the outage are lost by design (stale positions have no value). The next position arrives within 200ms of reconnection | Streams must be re-established. Reconnection depends on each consumer's retry backoff — could take seconds to minutes |
+| **Recovery** | Milliseconds after connectivity resumes — middleware re-delivers queued reliable data and reasserts liveliness | Each of the N×M broken streams must reconnect independently, re-discover via Zeroconf (whose mDNS registrations may have expired), and replay server-side caches |
 
-**Impact:** With DDS, you can start and stop applications in any order and they just find each other. With gRPC, every consumer must implement a discovery-browse-connect loop (~50 lines per app).
-
-### Fault Tolerance: What Happens When a Facility Crashes?
+### When a Controller Facility Restarts
 
 | | Connext DDS | gRPC |
 |---|---|---|
-| **Detection** | Middleware liveliness lease (5s) — automatic callback | Stream error caught in try/except — manual retry with backoff |
-| **Dashboard awareness** | Liveliness violation triggers status change to "offline" within 5s | Must detect gRPC stream reset, then update UI |
-| **Handoff in progress** | Deadline violation detected; can trigger alert | RPC timeout after configurable wait; exception handling |
-| **Recovery** | Automatic re-discovery when facility restarts | Manual reconnection in each consumer |
+| **Detection** | Liveliness lease expires after 5s — every subscriber is notified automatically via middleware callback | Each connected client detects the TCP stream error independently; detection time varies by client |
+| **Recovery** | Restarted facility re-joins the domain; middleware re-discovers it; transient-local data (flight plans, tracking state, runway status) is delivered automatically from other participants' caches | Restarted facility re-registers with Zeroconf; each consumer must detect the new registration, open a fresh stream, and hope the server's in-memory cache was rebuilt (it wasn't — it crashed) |
+| **State after restart** | Facility immediately receives current state of the world from peers who cached it | Facility starts with empty caches; must wait for fresh data to arrive |
 
-**Impact:** DDS provides deterministic failure detection timers as declarative policy. gRPC requires each app to implement its own retry/reconnect/timeout logic.
+### Adding a New Component to the System
 
-### Late Join: What If Dashboard Starts After Aircraft Are Already Flying?
-
-| | Connext DDS | gRPC |
-|---|---|---|
-| **Mechanism** | Transient-local durability — middleware caches last state per instance | Application-level cache — server replays from in-memory `StreamBroadcaster` |
-| **What dashboard sees** | All current flight plans, latest position per aircraft, runway status, tracking state — delivered automatically by middleware | Cached messages replayed by each server on stream open — limited by cache size and TTL |
-| **Implementation** | Zero code — QoS policy in XML | ~50 lines per data type (`StreamBroadcaster` with `key_fn`, `max_cache`, `ttl_s`) |
-
-**Impact:** With DDS, any reader joining late automatically receives the current state of the world — a fundamental middleware guarantee. With gRPC, each server must implement and maintain its own cache, and the behavior varies by how the cache is configured.
-
-### Scalability: What Happens When You Add 100 More Aircraft?
+**Scenario:** You want to add a military airspace coordinator that monitors all aircraft above 40,000 ft.
 
 | | Connext DDS | gRPC |
 |---|---|---|
-| **Network topology** | 1 multicast packet per position update — all readers receive the same packet | 1 TCP stream per consumer — each reader gets a separate copy |
-| **10 aircraft → 34 facilities** | ~10 KB/s total (multicast) | ~340 KB/s total (10 × 34 point-to-point streams) |
-| **100 aircraft → 34 facilities** | ~100 KB/s total (multicast) | ~3,400 KB/s total (100 × 34 streams) |
-| **Connections per facility** | 1 reader (receives from all aircraft) | N streams (1 per aircraft) |
-| **Adding aircraft** | Zero configuration — new aircraft discovered, positions received | Each facility's discovery loop spawns a new connection thread |
+| **Data access** | Create a DDS reader on the `AircraftPosition` topic with a content filter: `"altitude > 40000"`. Done. No changes to any existing application. The middleware evaluates the filter at each publisher and delivers only matching positions | Must connect to every aircraft's gRPC server and open a `StreamPositions` stream. Either: (a) receive all positions and filter client-side, or (b) add a new filter field to the `.proto` definition, regenerate stubs, update every aircraft server, redeploy them all |
+| **Discovery** | Set appropriate partitions and the coordinator discovers all participants automatically | Must browse Zeroconf for all `_atc-aircraft._tcp` services and maintain a connection thread per aircraft |
+| **Impact on existing system** | None — existing applications are unaware the coordinator exists | If server-side filtering is needed, every aircraft server must be modified and redeployed |
 
-**Impact:** DDS bandwidth scales with the number of *producers* (multicast). gRPC bandwidth scales with *producers × consumers* (point-to-point). At demo scale this is negligible; at production scale (thousands of aircraft) the difference is orders of magnitude.
+### Send Calls and Network Packets
 
-### Data Filtering: How Does a Tower Receive Only Its Own Traffic?
+The difference shows up at two levels: what the **application code** does, and what goes **on the wire**. Both matter — application-level sends consume CPU and require connection management; network packets consume bandwidth and router resources.
 
-| | Connext DDS | gRPC |
-|---|---|---|
-| **Mechanism** | Content-Filtered Topics — subscriber specifies a SQL expression (e.g., `"tail_number = 'N738WN'"`) at runtime; the middleware evaluates it at the *publisher* and only sends matching data over the network | Server-side Python closures — the server must anticipate every filter a client might need and hard-code the logic; client passes filter parameters defined in the `.proto` contract |
-| **Who defines the filter** | The *subscriber*, at runtime, using any SQL expression over the topic's fields — no server changes needed | The *server developer*, at build time — adding a new filter field requires changing the `.proto`, regenerating stubs, and redeploying the server |
-| **Bandwidth** | Writer-side filtering: unmatched data never leaves the publisher | Server sends matching data per TCP stream; each consumer is a separate connection regardless of filter |
-| **Extensibility** | Any new subscriber can define its own filter without touching existing code | New filter requirements require coordinated server + client changes |
-| **Discovery isolation** | DomainParticipant partitions prevent unrelated apps from even discovering each other | No equivalent — all consumers see all Zeroconf registrations |
+**Scenario:** 5,000 aircraft publishing positions at 5 Hz (~200 bytes/sample), 20 en-route centers consuming positions.
 
-**Impact:** DDS filtering is decoupled — any subscriber can filter any field without the publisher knowing or caring. gRPC filtering is monolithic — the server and client must agree on which fields are filterable at compile time, and adding a new filter means redeploying the server.
-
-### QoS: How Are Real-Time Guarantees Enforced?
-
-DDS provides declarative QoS policies applied per topic profile — deadline, liveliness, reliability, ownership, durability, lifespan — all configured in a single XML file and enforced by the middleware:
-
-| QoS Policy | DDS (built-in) | gRPC (must implement) |
-|---|---|---|
-| **Deadline** | 200ms for positions, 5s for commands — violation callback | Manual timeout on stream read |
-| **Liveliness** | Manual-by-topic with 5s lease — automatic detection | Manual heartbeat publishing |
-| **Reliability** | Best-effort for positions, reliable for commands | Always TCP (reliable), no best-effort option |
-| **Durability** | Transient-local — last state cached by middleware | Manual in-memory cache per server |
-| **Ownership** | Shared ownership + by-source-timestamp for handoffs | No equivalent — application coordination |
-| **Lifespan** | 1s for positions (auto-expire stale data), 60s for alerts | Manual TTL in cache |
-
-**Impact:** With DDS, QoS is a configuration concern — change the XML, not the code. With gRPC, every QoS guarantee becomes application logic that must be written, tested, and maintained.
-
-### Data Consistency: How Do Handoffs Work?
-
-When an aircraft transitions from one controller to another (Tower → TRACON → Center), both implementations use a multi-step handoff protocol — but the guarantees differ:
+#### Application-level send/write calls per second
 
 | | Connext DDS | gRPC |
 |---|---|---|
-| **Protocol** | Shared `Handoff` topic — both controllers write to the same keyed instance | Direct unary RPC between facilities |
-| **Ordering** | `BY_SOURCE_TIMESTAMP` destination ordering ensures all readers converge on the newest update | RPC request/response enforces ordering for each pair |
-| **Concurrent updates** | `SHARED_OWNERSHIP` QoS allows both controllers to update tracking state during transition — middleware resolves | Application must coordinate — no built-in conflict resolution |
-| **Crash during handoff** | Liveliness violation detects crashed controller within 5s; remaining controller retains tracking | RPC timeout detects failure; manual fallback logic required |
+| **Per aircraft, per update** | 1 `write()` call — the middleware delivers to all matched readers | 20 `send()` calls — one per connected center stream |
+| **System-wide** | 5,000 × 5 = **25,000/s** | 5,000 × 5 × 20 = **500,000/s** |
+| **Ratio** | | **20×** |
 
-### Operational Overhead
+In gRPC, each center connects to **every** aircraft server regardless of location — there is no way to filter before connecting. Each stream requires its own `send()` call in the aircraft server.
+
+In DDS, the aircraft calls `write()` once. It doesn't know how many readers exist.
+
+#### Network packets per second (DDS on WAN, no multicast)
+
+Without multicast, the DDS middleware sends a separate packet to each matched reader — but **writer-side content filters** reduce the number of matched readers. Each aircraft is typically in 1 center's region, with 1-2 neighbors having overlapping bounding boxes, so on average ~2.5 centers match per aircraft.
+
+| | Connext DDS (writer-side filtering) | gRPC |
+|---|---|---|
+| **Matched/connected readers per aircraft** | ~2.5 (only centers whose filter matches) | 20 (every center connects, filters locally) |
+| **Network packets/s** | 5,000 × 5 × 2.5 = **62,500** | 5,000 × 5 × 20 = **500,000** |
+| **Ratio** | | **8×** |
+
+The 8× network difference comes entirely from writer-side filtering eliminating ~87% of the sends that gRPC must make because it cannot filter before connecting.
+
+#### What happens when you add TRACONs and towers
+
+The 20× and 8× ratios above are for **centers only**. Adding 180 TRACONs, 500 towers, and a dashboard — each of which also connects to every aircraft in gRPC — pushes the gRPC numbers dramatically higher while the DDS `write()` count stays at 25,000/s (one write per aircraft regardless of consumer count).
+
+#### Content filtering
 
 | | Connext DDS | gRPC |
 |---|---|---|
-| **External infrastructure** | None (peer-to-peer, no broker) | None (peer-to-peer with Zeroconf) |
-| **Per-app connection code** | ~0 lines (middleware handles discovery + connection) | ~100-150 lines (discovery + connection threads + retry logic) |
-| **Configuration** | QoS XML file (declarative) | Scattered across Python code |
-| **Monitoring** | Built-in observability (Monitoring Library 2.0) + RTI tools | Manual logging + gRPC channel state |
-| **License** | Commercial (free evaluation available) | Open-source, no license cost |
+| **Who defines filters** | The subscriber, at runtime — any SQL-like expression over any field (e.g., `altitude > 40000`) | The server developer, at build time — limited to simple key matches (tail number, airport code) that were anticipated in the `.proto` |
+| **Where filters run** | At the writer — unmatched data never leaves the publisher | At the server or client — the TCP stream exists regardless |
+| **Adding a new filter** | New subscriber defines it; no existing code changes | Requires `.proto` change, stub regeneration, server redeployment |
+
+### Real-Time Guarantees
+
+DDS enforces QoS policies in the middleware — they work regardless of application language, and changing them is a configuration file edit, not a code change:
+
+| Guarantee | Connext DDS | gRPC |
+|---|---|---|
+| **"Alert me if position data stops arriving"** | Deadline QoS (200ms) — middleware fires violation callback | Application must track last-received timestamp per aircraft and check it periodically |
+| **"Tell me if a center goes offline"** | Liveliness lease (5s) — automatic detection | Application must detect TCP stream failure or missing heartbeat |
+| **"During handoff, ensure all observers agree on who controls the aircraft"** | `SHARED_OWNERSHIP` + `BY_SOURCE_TIMESTAMP` — middleware resolves conflicts | No built-in mechanism — application must implement its own conflict resolution |
+| **"Don't waste bandwidth on stale positions"** | Lifespan QoS (1s) — middleware auto-discards old samples | Application must implement TTL logic in every cache |
+| **"New subscribers should see current state immediately"** | Transient-local durability — built into the middleware | Application must maintain per-data-type caches and replay them on each new stream connection |
 
 ### Summary
 
-Both approaches produce a working ATC demo. The fundamental trade-off:
+| | Connext DDS | gRPC |
+|---|---|---|
+| **Architecture** | Peer-to-peer data bus — applications publish and subscribe to shared topics | Client-server — each data producer runs a server, each consumer opens explicit connections |
+| **Scales by** | Adding participants to the data bus — application writes once, middleware handles delivery | Adding TCP streams — O(N×M) connections and threads, each managed by application code |
+| **Recovers from failures** | Automatically — middleware handles reconnection, data retransmission, and state convergence | Manually — each application must implement retry, reconnect, and state reconciliation |
+| **Extends with new components** | New subscribers join without touching existing code; filters are subscriber-defined at runtime | New consumers must connect to every relevant server; new filters require coordinated server changes |
+| **Configuration** | Declarative QoS in a single XML file | QoS-equivalent logic scattered across application code |
+| **Trade-off** | Commercial license required | Zero licensing cost; widely-known API |
 
-- **Connext DDS** handles discovery, filtering, fault detection, late-join state, data consistency, and QoS enforcement **in the middleware**. The application code focuses purely on domain logic. The trade-off is a commercial license requirement.
-
-- **gRPC** requires the application to implement all of those concerns explicitly. The resulting system works but carries more application-level complexity and fewer built-in guarantees. The trade-off is zero licensing cost and a widely-known API.
-
-For safety-critical or high-scale real-time systems, the middleware-level guarantees of DDS are difficult to replicate reliably in application code. For simpler request/reply services or systems where explicit control over every connection is preferred, gRPC's transparency is an advantage.
+Both approaches produce working demos. Only one is production-ready without additional engineering — eventual consistency, content-based filtering, partition isolation, connect/disconnect resilience, incremental deployment, and robust discovery are already built into DDS. With gRPC, you would have to design and implement each of those yourself. 
 
 ## Prerequisites
 

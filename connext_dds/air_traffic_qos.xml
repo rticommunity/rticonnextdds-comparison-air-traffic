@@ -19,7 +19,18 @@
                     <element>BuiltinQosSnippetLib::Optimization.Discovery.Common</element>
                     <element>BuiltinQosSnippetLib::Optimization.Discovery.Endpoint.Fast</element>
                     <element>BuiltinQosSnippetLib::Optimization.ReliabilityProtocol.Common</element>
+                    <!-- To use TypeObject V1 instead of V2 
+                        <element>BuiltinQosSnippetLib::Feature.TypeSupport.V2.Disable</element>
+                        <element>BuiltinQosSnippetLib::Feature.TypeSupport.V1.Enable</element>
+                    -->
                 </base_name>
+                <discovery_config>
+                    <!-- SPDP2 is more efficient but must be explicitly enabled -->
+                    <builtin_discovery_plugins>SPDP2 | SEDP</builtin_discovery_plugins>
+                    <!-- SPDP1 is the default for backward compatibility and interoperability with other vendors 
+                        <builtin_discovery_plugins>SPDP | SEDP</builtin_discovery_plugins>
+                    -->
+                </discovery_config>
                 <!-- Disable shared memory: avoids macOS semaphore/resource
                      exhaustion when running many participants on one host. -->
                 <transport_builtin>
