@@ -335,6 +335,15 @@ See [`connext_dds/README.md`](connext_dds/README.md) for prerequisites, installa
 
 This project was designed iteratively using AI tools with and without [RTI's Connext AI Design Expert (Connext MCP server)](https://chatbot.rti.com/docs/getting-started). The [`docs/design_process/`](docs/design_process/) directory documents this journey, including prompts, design iterations, and a comparison of using Connext AI Design Expert vs no Expert approaches.
 
-## License
+## Part of the RTI Technology Comparison Series
 
-Apache-2.0 — see [LICENSE](LICENSE).
+This repository is part of a series comparing middleware technologies for
+real-world distributed systems scenarios. Each comparison uses the same
+scenario to evaluate different technology stacks side by side.
+
+| Scenario | Technologies | Repository |
+|----------|-------------|------------|
+| **Air Traffic** | gRPC, DDS | *this repo* |
+| **Tractor Fleet** | gRPC, DDS | [`rticonnextdds-comparison-tractor-fleet`](https://github.com/rticommunity/rticonnextdds-comparison-tractor-fleet) |
+| *more coming* | | |
+
