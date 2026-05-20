@@ -25,11 +25,11 @@
                     -->
                 </base_name>
                 <discovery_config>
-                    <!-- SPDP2 is more efficient but must be explicitly enabled -->
-                    <builtin_discovery_plugins>SPDP2 | SEDP</builtin_discovery_plugins>
-                    <!-- SPDP1 is the default for backward compatibility and interoperability with other vendors 
-                        <builtin_discovery_plugins>SPDP | SEDP</builtin_discovery_plugins>
+                    <!-- SPDP2 is more efficient but must be explicitly enabled 
+                        <builtin_discovery_plugins>SPDP2 | SEDP</builtin_discovery_plugins>
                     -->
+                    <!-- SPDP1 is the default for backward compatibility and interoperability with other vendors -->
+                    <builtin_discovery_plugins>SPDP | SEDP</builtin_discovery_plugins>
                 </discovery_config>
                 <!-- Disable shared memory: avoids macOS semaphore/resource
                      exhaustion when running many participants on one host. -->
@@ -42,6 +42,7 @@
         <!--
             ReliableCommandProfile (base)
             Reliable, keep-all, transient-local, priority 5
+            No deadline — these are aperiodic event-driven topics.
         -->
         <qos_profile name="ReliableCommandProfile"
                      base_name="BuiltinQosLib::Generic.StrictReliable"
@@ -52,12 +53,6 @@
             </base_name>
 
             <datawriter_qos>
-                <deadline>
-                    <period>
-                        <sec>5</sec>
-                        <nanosec>0</nanosec>
-                    </period>
-                </deadline>
                 <liveliness>
                     <kind>AUTOMATIC_LIVELINESS_QOS</kind>
                     <lease_duration>
@@ -84,12 +79,6 @@
             </datawriter_qos>
 
             <datareader_qos>
-                <deadline>
-                    <period>
-                        <sec>5</sec>
-                        <nanosec>0</nanosec>
-                    </period>
-                </deadline>
                 <liveliness>
                     <kind>AUTOMATIC_LIVELINESS_QOS</kind>
                     <lease_duration>
@@ -255,6 +244,7 @@
             AircraftPositionProfile
             Topic: AircraftPosition — 5 Hz periodic telemetry
             Best-effort, volatile, exclusive ownership
+            Writer deadline 300ms (1.5× period), reader deadline 500ms (2.5× period)
         -->
         <qos_profile name="AircraftPositionProfile"
                      base_name="BuiltinQosLib::Pattern.PeriodicData"
@@ -264,7 +254,7 @@
                 <deadline>
                     <period>
                         <sec>0</sec>
-                        <nanosec>200000000</nanosec>
+                        <nanosec>300000000</nanosec>
                     </period>
                 </deadline>
                 <lifespan>
@@ -292,7 +282,7 @@
                 <deadline>
                     <period>
                         <sec>0</sec>
-                        <nanosec>200000000</nanosec>
+                        <nanosec>500000000</nanosec>
                     </period>
                 </deadline>
                 <reliability>

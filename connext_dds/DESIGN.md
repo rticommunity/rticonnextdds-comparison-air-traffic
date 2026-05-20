@@ -73,7 +73,7 @@ serving center.
 | Airport | `OPS/AIRPORT/<code>`, `OPS/TERMINAL/<serving_tracon>` | Same as tower minus FPS — no flight-plan interaction |
 | TRACON | `OPS/TERMINAL/<id>`, `OPS/FPS/*`, `OPS/ENROUTE/<serving_center>` | Reaches up into its center scope; discovers FPS |
 | Center | `OPS/ENROUTE/<center_id>`, `OPS/ENROUTE/*`, `OPS/FPS/*` | Cross-center handoffs via `OPS/ENROUTE/*`; discovers FPS |
-| Airplane | `OPS/FPS/*`, `OPS/TERMINAL/*`, `OPS/ENROUTE/*`, `OPS/AIRPORT/<origin>`, `OPS/AIRPORT/<destination>` | Discovers origin/destination towers, all TRACONs and centers along route, plus FPS for filing |
+| Airplane | `OPS/FPS/*`, `OPS/ENROUTE/*`, `OPS/TERMINAL/<origin_tracon>`, `OPS/TERMINAL/<dest_tracon>`, `OPS/AIRPORT/<origin>`, `OPS/AIRPORT/<destination>` | Discovers FPS for filing, all en-route centers along route, departure/arrival TRACONs (derived from scenario config) |
 | Flight Plan Service | `OPS/FPS/<name>` | Concrete instance partition (e.g., `OPS/FPS/main`); consumers match via `OPS/FPS/*` |
 | Dashboard | `OPS/*` | Global observer — single wildcard discovers all `OPS/` endpoints |
 | Weather Service | `OPS/WEATHER/*`, `OPS/ENROUTE/*` | Publishes convective cells; center wildcard ensures centers discover its writer |
@@ -90,7 +90,7 @@ Adjacent layers discover each other via the "reach up" overlap:
 - TRACON N90 ↔ Center ZNY (both join `OPS/ENROUTE/ZNY`)
 - Center ZNY ↔ Center ZLA (each center's `OPS/ENROUTE/*` matches the other's concrete partition)
 - Airplane ↔ Tower KJFK (match on `OPS/AIRPORT/KJFK`)
-- Airplane ↔ TRACON N90 (airplane `OPS/TERMINAL/*` matches `OPS/TERMINAL/N90`)
+- Airplane ↔ TRACON N90 (airplane joins `OPS/TERMINAL/N90` — its origin TRACON)
 
 Each airport's `serving_tracon` and each TRACON's `serving_center` are configured in [`air_traffic_scenario.json`](../air_traffic_scenario.json). The script [`scripts/demo_start.sh`](scripts/demo_start.sh) derives each TRACON's airport list by scanning airports with matching `serving_tracon`.
 
@@ -207,7 +207,7 @@ These profiles define shared QoS behavior. They are not used directly by app cod
 | Profile | Base Built-in Profile | Key Policies |
 |---|---|---|
 | `AtcParticipantProfile` | `BuiltinQosLib::Generic.Common` | Discovery optimizations, fast endpoint discovery, reliability protocol tuning |
-| `ReliableCommandProfile` | `BuiltinQosLib::Generic.StrictReliable` | Reliable, keep-all, transient-local, deadline 5s, liveliness 10s, priority 5 |
+| `ReliableCommandProfile` | `BuiltinQosLib::Generic.StrictReliable` | Reliable, keep-all, transient-local, liveliness 10s, priority 5 |
 | `StateDataProfile` | `BuiltinQosLib::Pattern.Status` | Reliable, keep-last-1, transient-local, exclusive ownership |
 
 #### Per-Topic Profiles
@@ -216,7 +216,7 @@ Each topic maps 1:1 to a profile. App code references these names directly.
 
 | Profile | Inherits From | Topic | Additional Overrides |
 |---|---|---|---|
-| `AircraftPositionProfile` | `BuiltinQosLib::Pattern.PeriodicData` | AircraftPosition | Best-effort, keep-last-1, volatile, deadline 200ms, lifespan 1s, exclusive ownership |
+| `AircraftPositionProfile` | `BuiltinQosLib::Pattern.PeriodicData` | AircraftPosition | Best-effort, keep-last-1, volatile, writer deadline 300ms, reader deadline 500ms, lifespan 1s, exclusive ownership |
 | `ControllerInstructionProfile` | `ReliableCommandProfile` | ControllerInstruction | — |
 | `PilotAcknowledgmentProfile` | `ReliableCommandProfile` | PilotAcknowledgment | — |
 | `AlertProfile` | `BuiltinQosLib::Pattern.Event` | Alert | Reliable, keep-all, transient-local, lifespan 60s, priority 10 |
@@ -341,7 +341,7 @@ This way the reader:
 
 Each aircraft runs one DomainParticipant.
 
-**DP Partitions:** `OPS/FPS/*`, `OPS/TERMINAL/*`, `OPS/ENROUTE/*`, `OPS/AIRPORT/<origin>`, `OPS/AIRPORT/<destination>`
+**DP Partitions:** `OPS/FPS/*`, `OPS/ENROUTE/*`, `OPS/TERMINAL/<origin_tracon>`, `OPS/TERMINAL/<dest_tracon>`, `OPS/AIRPORT/<origin>`, `OPS/AIRPORT/<destination>`
 
 | Direction | Topic / Service | QoS Profile | Notes |
 |---|---|---|---|
@@ -696,7 +696,8 @@ Aircraft do **not** subscribe to the `Handoff` topic. They are entirely passive 
 │        ▲ CFT                                  ▲ CFT                       │
 │        │                                      │                           │
 │   ✈ airplane_app (N instances)                                            │
-│     Partitions: OPS/FPS/*, OPS/TERMINAL/*, OPS/ENROUTE/*,                 │
+│     Partitions: OPS/FPS/*, OPS/ENROUTE/*,                                 │
+│                 OPS/TERMINAL/<origin_tracon>, OPS/TERMINAL/<dest_tracon>, │
 │                 OPS/AIRPORT/<origin>, OPS/AIRPORT/<destination>           │
 │     Publishes: AircraftPosition (periodic 5Hz)                            │
 │     Subscribes: ControllerInstruction (CFT by tail_number)                │

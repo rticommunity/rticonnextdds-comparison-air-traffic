@@ -18,7 +18,7 @@ graph TB
     TWR_LAX["Tower KLAX<br/><i>AIRPORT/KLAX · FPS/*</i><br/><i>↑ TERMINAL/SCT</i>"]:::apt
     APT_LAX["Airport KLAX<br/><i>AIRPORT/KLAX</i><br/><i>↑ TERMINAL/SCT</i>"]:::apt
 
-    AC{{"✈ N12345 (KJFK → KLAX)<br/><i>FPS/* · TERMINAL/* · ENROUTE/*</i><br/><i>AIRPORT/KJFK · AIRPORT/KLAX</i>"}}:::ac
+    AC{{"✈ N12345 (KJFK → KLAX)<br/><i>FPS/* · ENROUTE/*</i><br/><i>TERMINAL/N90 · TERMINAL/SCT · AIRPORT/KJFK · AIRPORT/KLAX</i>"}}:::ac
 
     %% Reach-up hierarchy (solid) — concrete ↔ concrete
     TWR_JFK -->|"TERMINAL/N90"| N90
@@ -33,8 +33,8 @@ graph TB
     AC -.->|"AIRPORT/KJFK"| APT_JFK
     AC -.->|"AIRPORT/KLAX"| TWR_LAX
     AC -.->|"AIRPORT/KLAX"| APT_LAX
-    AC -.->|"TERMINAL/*"| N90
-    AC -.->|"TERMINAL/*"| SCT
+    AC -.->|"TERMINAL/N90"| N90
+    AC -.->|"TERMINAL/SCT"| SCT
     AC -.->|"ENROUTE/*"| ZNY
     AC -.->|"ENROUTE/*"| ZLA
 

@@ -45,6 +45,7 @@ from common import (
     load_aircraft_config,
     load_airport_coords,
     load_qos_provider,
+    load_tracon_for_airport,
     make_id,
     now_ms,
     read_sim_speed_from_discovery,
@@ -124,9 +125,18 @@ class AirplaneSimulator:
 
         # DDS setup
         self.qos_provider = load_qos_provider()
+        # Derive serving TRACONs for origin/destination airports
+        tracon_map = load_tracon_for_airport(config_path)
+        origin_tracon = tracon_map.get(origin)
+        dest_tracon = tracon_map.get(destination)
+        terminal_partitions = []
+        if origin_tracon:
+            terminal_partitions.append(f"OPS/TERMINAL/{origin_tracon}")
+        if dest_tracon and dest_tracon != origin_tracon:
+            terminal_partitions.append(f"OPS/TERMINAL/{dest_tracon}")
         dp_partitions = [
             "OPS/FPS/*",
-            "OPS/TERMINAL/*",
+            *terminal_partitions,
             "OPS/ENROUTE/*",
             f"OPS/AIRPORT/{origin}",
             f"OPS/AIRPORT/{destination}",
