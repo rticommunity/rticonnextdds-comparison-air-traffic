@@ -447,6 +447,9 @@ def main():
     )
     tower.run(duration_s=args.duration)
     tower.participant.close()
+    
+    dds.DomainParticipant.finalize_participant_factory()
+
 
 
 if __name__ == "__main__":
