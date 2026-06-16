@@ -24,6 +24,7 @@ from collections import defaultdict, deque
 
 import grpc
 from flask import Flask, Response, render_template_string, request
+from waitress import serve as waitress_serve
 
 import air_traffic_types_pb2 as pb
 import air_traffic_types_pb2_grpc as pb_grpc
@@ -1970,7 +1971,7 @@ def main():
     poller.start()
 
     log.info("Dashboard running at http://localhost:%d", args.port)
-    app.run(host=args.host, port=args.port, threaded=True)
+    waitress_serve(app, host=args.host, port=args.port, threads=8, channel_timeout=3600)
 
 
 if __name__ == "__main__":
