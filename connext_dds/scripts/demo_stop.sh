@@ -13,7 +13,7 @@
 #   ./demo_stop.sh tower KJFK       # stop only the KJFK tower
 #   ./demo_stop.sh center tower     # stop all centers and towers
 #
-set -uo pipefail
+set -o pipefail
 
 declare -A APP_MAP=(
     [flightplan]="app_flightplan_service.py"

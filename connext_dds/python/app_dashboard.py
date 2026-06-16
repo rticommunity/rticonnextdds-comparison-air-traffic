@@ -1839,6 +1839,9 @@ def main():
     print(f"Dashboard running at http://localhost:{args.port}")
     waitress_serve(app, host=args.host, port=args.port, threads=8, channel_timeout=3600)
     participant.close()
+    
+    dds.DomainParticipant.finalize_participant_factory()
+
 
 
 if __name__ == "__main__":

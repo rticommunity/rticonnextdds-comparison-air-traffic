@@ -159,6 +159,9 @@ def main():
     svc.run(duration_s=args.duration)
     svc.replier.close()
     svc.participant.close()
+    
+    dds.DomainParticipant.finalize_participant_factory()
+
 
 
 if __name__ == "__main__":

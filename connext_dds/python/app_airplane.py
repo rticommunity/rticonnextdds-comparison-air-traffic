@@ -568,6 +568,9 @@ def main():
     airplane.run(duration_s=args.duration)
     airplane.gate_requester.close()
     airplane.participant.close()
+    
+    dds.DomainParticipant.finalize_participant_factory()
+    
 
 
 if __name__ == "__main__":

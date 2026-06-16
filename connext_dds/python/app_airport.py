@@ -257,6 +257,8 @@ def main():
     airport.run(duration_s=args.duration)
     airport.gate_replier.close()
     airport.participant.close()
+    
+    dds.DomainParticipant.finalize_participant_factory()
 
 
 if __name__ == "__main__":

@@ -559,6 +559,9 @@ def main():
     )
     tracon.run(duration_s=args.duration)
     tracon.participant.close()
+    
+    dds.DomainParticipant.finalize_participant_factory()
+
 
 
 if __name__ == "__main__":

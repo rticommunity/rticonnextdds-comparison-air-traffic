@@ -33,7 +33,7 @@
 #   ./demo_start.sh airplane --callsign AAL100
 #   ./demo_start.sh tracon --tracon-id N90
 #
-set -euo pipefail
+set -eo pipefail
 
 export RTI_MONITORING2_ENABLE=TRUE
 
