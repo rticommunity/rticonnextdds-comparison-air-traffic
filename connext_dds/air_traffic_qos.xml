@@ -8,12 +8,33 @@
 
     <qos_library name="AirTrafficControl_QosLib">
 
+        <qos_profile name="MonitoringNoShMemParticipantProfile"
+                     base_name="BuiltinQosLib::Generic.Monitoring2">
+            <domain_participant_qos>
+                <transport_builtin>
+                    <mask>UDPv4</mask>
+                </transport_builtin>
+            </domain_participant_qos>
+        </qos_profile>
+
         <!--
             AtcParticipantProfile
             Base participant profile with discovery and monitoring optimizations
         -->
         <qos_profile name="AtcParticipantProfile"
-                     base_name="BuiltinQosLib::Generic.Common">
+                     base_name="BuiltinQosLib::Generic.Common"
+                     is_default_participant_factory_profile="true">
+            <participant_factory_qos>
+                <monitoring>
+                    <distribution_settings>
+                        <dedicated_participant>
+                            <participant_qos_profile_name>
+                                AirTrafficControl_QosLib::MonitoringNoShMemParticipantProfile
+                            </participant_qos_profile_name>
+                        </dedicated_participant>
+                    </distribution_settings>
+                </monitoring>
+            </participant_factory_qos>
             <domain_participant_qos>
                 <base_name>
                     <element>BuiltinQosSnippetLib::Optimization.Discovery.Common</element>

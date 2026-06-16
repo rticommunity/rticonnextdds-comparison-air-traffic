@@ -255,6 +255,7 @@ def main():
         weather_interval_s=args.wx_interval,
     )
     airport.run(duration_s=args.duration)
+    airport.gate_replier.close()
     airport.participant.close()
 
 

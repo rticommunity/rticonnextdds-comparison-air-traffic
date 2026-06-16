@@ -24,6 +24,7 @@ from collections import defaultdict, deque
 
 
 from flask import Flask, Response, render_template_string, request
+from waitress import serve as waitress_serve
 
 import rti.connextdds as dds
 from air_traffic_types import NationalAirTrafficControl as ATC
@@ -1836,7 +1837,7 @@ def main():
     t.start()
 
     print(f"Dashboard running at http://localhost:{args.port}")
-    app.run(host=args.host, port=args.port, threaded=True)
+    waitress_serve(app, host=args.host, port=args.port, threads=8, channel_timeout=3600)
     participant.close()
 
 

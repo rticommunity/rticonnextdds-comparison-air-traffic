@@ -5,3 +5,4 @@ rti.connext>=7.7.0
 
 # Web dashboard
 flask>=3.0
+waitress>=3.0

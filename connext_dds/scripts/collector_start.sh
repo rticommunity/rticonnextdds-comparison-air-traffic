@@ -6,3 +6,4 @@ export RTI_LICENSE_FILE="${RTI_LICENSE_FILE:-$NDDSHOME/rti_license.dat}"
 echo "Starting rticollectorservice..."
 echo "Connect at  ws://localhost:19098/rti/collector_service/v1/observables"
 ${NDDSHOME}/bin/rticollectorservicelite -cfgName NonSecureRemoteDebuggingLAN -verbosity 4
+#${NDDSHOME}/bin/rticollectorservicelite -cfgName santa_cruz -cfgFile /Users/gerardo/dom/gitrepos/rticonnextdds-comparison-air-traffic/connext_dds/scripts/santa_cruz.xml -verbosity 2
