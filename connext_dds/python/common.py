@@ -14,6 +14,8 @@ import uuid
 import rti.connextdds as dds
 
 DOMAIN_ID = 0
+DOMAIN_TAG = "airtraffic-USA"
+DOMAIN_TAG_PROPERTY = "dds.domain_participant.domain_tag"
 QOS_FILE = None  # Set by app via --qos-file arg before calling load_qos_provider()
 QOS_LIB = "AirTrafficControl_QosLib"
 
@@ -278,6 +280,7 @@ def load_qos_provider(qos_file: str | None = None) -> dds.QosProvider:
 def create_participant(
     qos_provider: dds.QosProvider,
     domain_id: int = DOMAIN_ID,
+    domain_tag: str = DOMAIN_TAG,
     dp_partitions: list[str] | None = None,
     participant_name: str | None = None,
     app_name: str | None = None,
@@ -285,6 +288,11 @@ def create_participant(
     participant_qos = qos_provider.participant_qos_from_profile(
         f"{QOS_LIB}::AtcParticipantProfile"
     )
+    if domain_tag:
+        participant_qos.property.set(
+            {DOMAIN_TAG_PROPERTY: domain_tag},
+            propagate=True,
+        )
     if dp_partitions:
         participant_qos.partition.name = dp_partitions
     if participant_name:
