@@ -35,6 +35,7 @@ from common import (
     now_ts,
     serve_stream,
     set_sim_speed,
+    start_sim_speed_listener,
     setup_logging,
     shutdown_event,
 )
@@ -476,6 +477,7 @@ def main():
     install_signal_handlers()
     AIRPORT_COORDS = load_airport_coords(args.config)
     set_sim_speed(initial_sim_speed(args.config))
+    start_sim_speed_listener()
 
     cfg = load_aircraft_config(args.callsign, args.config)
     tail = args.tail_number or (cfg.get("tail_number") if cfg else None) or _random_tail_number()

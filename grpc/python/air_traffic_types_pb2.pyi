@@ -549,6 +549,12 @@ class WeatherReportFilter(_message.Message):
     airport_code: str
     def __init__(self, airport_code: _Optional[str] = ...) -> None: ...
 
+class RunwayStatusFilter(_message.Message):
+    __slots__ = ("airport_code",)
+    AIRPORT_CODE_FIELD_NUMBER: _ClassVar[int]
+    airport_code: str
+    def __init__(self, airport_code: _Optional[str] = ...) -> None: ...
+
 class HandoffFilter(_message.Message):
     __slots__ = ("controller_id",)
     CONTROLLER_ID_FIELD_NUMBER: _ClassVar[int]
@@ -558,6 +564,12 @@ class HandoffFilter(_message.Message):
 class EmptyFilter(_message.Message):
     __slots__ = ()
     def __init__(self) -> None: ...
+
+class SimulationSpeed(_message.Message):
+    __slots__ = ("multiplier",)
+    MULTIPLIER_FIELD_NUMBER: _ClassVar[int]
+    multiplier: float
+    def __init__(self, multiplier: _Optional[float] = ...) -> None: ...
 
 class HandoffAck(_message.Message):
     __slots__ = ("success", "message")

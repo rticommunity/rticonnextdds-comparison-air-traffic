@@ -170,7 +170,12 @@ All types are defined in [`air_traffic_types.proto`](air_traffic_types.proto) us
 
 **Request/Reply Messages (4):** `FlightPlanRequest`, `FlightPlanResponse`, `GateRequest`, `GateAssignmentReply`
 
-**Subscription Filter Messages:** Per-topic filter messages used as request parameters for server-streaming RPCs (e.g., `ControllerInstructionFilter`, `HandoffFilter`, `WeatherReportFilter`)
+**Subscription Filter Messages:** Per-topic filter messages used as request parameters for server-streaming RPCs (e.g., `ControllerInstructionFilter`, `HandoffFilter`, `WeatherReportFilter`, `RunwayStatusFilter`)
+
+**Simulation control:** The dashboard hosts `SimulationControlService` and
+publishes the current `SimulationSpeed` over a server stream. Every application
+discovers that service through Zeroconf and keeps a streaming subscription open,
+providing the explicit gRPC counterpart to DDS participant-property propagation.
 
 ---
 

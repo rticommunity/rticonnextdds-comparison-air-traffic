@@ -123,7 +123,7 @@ An aircraft publishing position at 5 Hz (~200 bytes per sample):
 
 Writer-side content filtering is a key differentiator: DDS evaluates each subscriber's filter at the publisher, so data that no reader needs is never sent — reducing CPU use, bandwidth, and the number of network packets. In gRPC, the server sends to every connected stream regardless of whether the consumer needs the data, because there is no built-in mechanism to filter on the writer side.
 
-### Two Examples: Data-Centric vs. Point-to-Point
+### Three Examples: Data-Centric vs. Point-to-Point
 
 The architectural difference shows up in both publish-subscribe flows and command flows. Here is how each implementation handles them, drawn directly from the code in this repo.
 
@@ -146,6 +146,34 @@ Center ZNY detects an aircraft leaving its airspace and needs to transfer contro
 **gRPC — point-to-point RPC:** ZNY calls `discovery.get_endpoint("center", "ZLA")` to look up ZLA's host:port from Zeroconf, opens a new TCP channel, and calls `stub.SendHandoff(ho, timeout=5)` — a blocking unary RPC. ZLA's handler accepts and returns `HandoffAck(success=True)`. If ZLA hasn't been discovered yet, the handoff fails (warning log, no retry). If the network dies mid-RPC, ZNY gets a timeout exception with no built-in reconciliation. Other observers (dashboard) don't see this exchange — they only see what each center publishes on its own broadcaster stream, which they must be separately subscribed to.
 
 **What this means operationally:** In DDS, a handoff is a write to a shared data space — the middleware handles delivery, filtering, and conflict resolution. In gRPC, a handoff is a direct call between two specific processes — the sender must know the receiver's address, manage the connection, handle failures, and every observer must independently subscribe to every center to get the full picture.
+
+#### Example 3 — Changing simulation speed at runtime (distributed control state)
+
+The dashboard lets an operator change the simulation speed while all applications
+are running. Every aircraft and facility must receive the new multiplier, including
+applications that start after the value changes.
+
+**DDS — reuse the built-in discovery channel:** The dashboard sets a `sim_speed`
+property on its DomainParticipant with propagation enabled. Connext distributes the
+property through its existing participant-discovery mechanism. Other participants
+read the propagated value from their built-in participant discovery reader; no new
+Topic, service, port, discovery protocol, or point-to-point connection is needed.
+Applications joining later also receive the dashboard's current participant
+properties as part of discovery.
+
+**gRPC — build a dedicated distributed-control mechanism:** gRPC has no built-in
+distributed discovery-state channel, so the dashboard hosts a new
+`SimulationControlService` with a server-streaming `WatchSimulationSpeed` RPC. The
+service must be registered separately with Zeroconf, every application must discover
+it and maintain a subscription, and application code must implement retries,
+reconnection, thread management, and cached-value replay for late joiners.
+
+**What this means operationally:** Both implementations now provide live speed
+changes, but DDS obtains the behavior by reusing middleware discovery. The gRPC
+implementation requires an additional application-level service and lifecycle
+machinery. This small control feature demonstrates a broader difference: DDS
+provides a distributed data and discovery substrate, while gRPC provides RPC
+transport from which distributed behavior must be assembled explicitly.
 
 ### When Connectivity Is Temporarily Lost
 
@@ -320,30 +348,28 @@ source setup.sourceme
 # Build the image (from repo root)
 docker build -f docker/Dockerfile -t atc-demo .
 
-# Run the DDS demo (all components; RTI license required)
-docker run --env-file .env.local \
-     -v ./rti_license.dat:/tmp/rti_license.dat \
-     -p 8050:8050 atc-demo dds
+# Run the DDS demo (stages and mounts RTI_LICENSE_FILE from .env.local)
+./docker/run.sh dds
 
 # Run the gRPC demo (all components; no RTI license required)
-docker run --env-file .env.local \
-     -p 8050:8050 atc-demo grpc
+./docker/run.sh grpc
 
 # Run only the DDS dashboard
-docker run --env-file .env.local \
-     -v ./rti_license.dat:/tmp/rti_license.dat \
-     -p 8050:8050 atc-demo dds dashboard
+./docker/run.sh dds dashboard
 
 # Run only the gRPC dashboard
-docker run --env-file .env.local \
-     -p 8050:8050 atc-demo grpc dashboard
+./docker/run.sh grpc dashboard
 ```
 
-Docker reads `CARTO_BASEMAP_API_KEY` from `.env.local` at runtime. The license
-is mounted separately because the `RTI_LICENSE_FILE` path in `.env.local`
-refers to the host; the container entrypoint uses `/tmp/rti_license.dat` for
-the mounted file. `.env.local` is excluded from both Git and the Docker build
-context and is never stored in the image.
+The host-side launcher reads `.env.local`, passes `CARTO_BASEMAP_API_KEY` at
+runtime, and validates the file named by `RTI_LICENSE_FILE`. For DDS, it copies
+the license (dereferencing symbolic links) to the ignored local staging path
+`docker/.local/rti_license.dat`, then mounts that copy read-only at
+`/tmp/rti_license.dat` in the container. Keeping the mounted file beneath the
+repository avoids Docker Desktop host-directory sharing differences, such as
+macOS not sharing `/Applications` by default. The staging path and `.env.local`
+are excluded from Git and the Docker build context; the license is never stored
+in the image. Native execution continues to use `RTI_LICENSE_FILE` directly.
 
 Select the implementation with the first argument, `dds` or `grpc`, followed
 optionally by a component name (`dashboard`, `center`, `tower`, `tracon`,

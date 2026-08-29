@@ -3,23 +3,15 @@
 # Build (from repo root):
 #   docker build -f docker/Dockerfile -t atc-demo .
 #
-# Run the DDS implementation (all processes):
-#
-#   Linux (--network host enables DDS multicast discovery across containers):
-#     docker run --rm --env-file .env.local -v ./rti_license.dat:/tmp/rti_license.dat --network host atc-demo dds
-#
-#   macOS (Docker Desktop runs in a VM; use -p to forward the dashboard port):
-#     docker run --rm --env-file .env.local -v ./rti_license.dat:/tmp/rti_license.dat -p 8050:8050 atc-demo dds
-#
-#   Windows (same as macOS — Docker Desktop uses a VM):
-#     docker run --rm --env-file .env.local -v ./rti_license.dat:/tmp/rti_license.dat -p 8050:8050 atc-demo dds
+# Run the DDS implementation (stages and mounts RTI_LICENSE_FILE from .env.local):
+#   ./docker/run.sh dds
 #
 # Run the gRPC implementation (no RTI license required):
-#   docker run --rm --env-file .env.local -p 8050:8050 atc-demo grpc
+#   ./docker/run.sh grpc
 #
 # Run a single component (append the implementation and component names):
-#   docker run --rm --env-file .env.local -v ./rti_license.dat:/tmp/rti_license.dat -p 8050:8050 atc-demo dds dashboard
-#   docker run --rm --env-file .env.local -p 8050:8050 atc-demo grpc dashboard
+#   ./docker/run.sh dds dashboard
+#   ./docker/run.sh grpc dashboard
 #
 # Components: all (default), dashboard, center, tower, tracon, airport,
 #             airplane, flightplan, weather

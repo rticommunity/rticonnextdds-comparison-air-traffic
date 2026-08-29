@@ -4,6 +4,7 @@ __pycache__/
 .vscode
 .connext/
 .env.local
+/docker/.local/
 venv/
 not_in_git/
 .DS_Store

@@ -30,11 +30,15 @@ import air_traffic_types_pb2 as pb
 import air_traffic_types_pb2_grpc as pb_grpc
 from common import (
     DiscoveryManager,
+    StreamBroadcaster,
+    ZeroconfRegistrar,
+    create_grpc_server,
     get_sim_speed,
     initial_sim_speed,
     install_signal_handlers,
     make_id,
     now_ts,
+    serve_stream,
     set_sim_speed,
     setup_logging,
     shutdown_event,
@@ -82,6 +86,7 @@ _injected_cells: set[str] = set()
 _cell_cancel: dict[str, threading.Event] = {}
 _cell_lock = threading.Lock()
 _grpc_poller = None  # set in main()
+_speed_control = None  # set in main()
 
 _AIRPLANE_SCRIPT = os.path.join(os.path.dirname(__file__), "app_airplane.py")
 _AIRPORT_CODES = []
@@ -98,6 +103,20 @@ def _cleanup_spawned():
 
 
 atexit.register(_cleanup_spawned)
+
+
+class SimulationControlServicer(pb_grpc.SimulationControlServiceServicer):
+    """Broadcasts the current speed to all running gRPC applications."""
+
+    def __init__(self, initial_speed: float):
+        self._updates = StreamBroadcaster(key_fn=lambda _: "speed", max_cache=1)
+        self.publish(initial_speed)
+
+    def publish(self, speed: float) -> None:
+        self._updates.publish(pb.SimulationSpeed(multiplier=speed))
+
+    def WatchSimulationSpeed(self, request, context):
+        return serve_stream(self._updates, context)
 
 
 # ── Proto → dict helpers ───────────────────────────────────────────────────
@@ -325,7 +344,7 @@ class GrpcPoller:
             threading.Thread(
                 target=self._stream_airport_weather, args=(stub,), daemon=True
             ).start()
-            for rwy in stub.StreamRunwayStatus(pb.EmptyFilter(), timeout=600):
+            for rwy in stub.StreamRunwayStatus(pb.RunwayStatusFilter(), timeout=600):
                 if shutdown_event.is_set():
                     break
                 with state_lock:
@@ -571,7 +590,7 @@ def index():
         airports_json=_airports_js,
         centers_json=_centers_js,
         tracons_json=_tracons_js,
-    carto_api_key=app.config["carto_api_key"],
+        carto_api_key=app.config["carto_api_key"],
     )
 
 
@@ -582,6 +601,8 @@ def post_speed():
         speed = float(data["speed"])
         set_sim_speed(speed)
         write_sim_speed(speed, app.config["scenario_config"])
+    if _speed_control:
+        _speed_control.publish(get_sim_speed())
     return {"speed": get_sim_speed()}
 
 
@@ -1937,7 +1958,7 @@ map.on("click", function(e) {
 # ── Main ────────────────────────────────────────────────────────────────────
 
 def main():
-    global _centers_js, _tracons_js, _airports_js, _AIRPORT_CODES
+    global _centers_js, _tracons_js, _airports_js, _AIRPORT_CODES, _speed_control
 
     parser = argparse.ArgumentParser(description="ATC Web Dashboard (gRPC)")
     parser.add_argument("--config", required=True, help="Path to scenario config JSON")
@@ -1956,6 +1977,15 @@ def main():
     set_sim_speed(initial_sim_speed(args.config))
     app.config["scenario_config"] = args.config
     app.config["carto_api_key"] = carto_api_key
+
+    _speed_control = SimulationControlServicer(get_sim_speed())
+    control_server, control_port = create_grpc_server(0)
+    pb_grpc.add_SimulationControlServiceServicer_to_server(
+        _speed_control, control_server,
+    )
+    control_server.start()
+    control_registrar = ZeroconfRegistrar()
+    control_registrar.register("control", "dashboard", control_port)
 
     with open(args.config) as f:
         _scenario_cfg = json.load(f)
@@ -1981,7 +2011,11 @@ def main():
     poller.start()
 
     log.info("Dashboard running at http://localhost:%d", args.port)
-    waitress_serve(app, host=args.host, port=args.port, threads=8, channel_timeout=3600)
+    try:
+        waitress_serve(app, host=args.host, port=args.port, threads=8, channel_timeout=3600)
+    finally:
+        control_registrar.close()
+        control_server.stop(0).wait()
 
 
 if __name__ == "__main__":

@@ -28,6 +28,7 @@ from common import (
     now_ts,
     serve_stream,
     set_sim_speed,
+    start_sim_speed_listener,
     setup_logging,
     shutdown_event,
 )
@@ -185,6 +186,7 @@ def main():
     log = setup_logging(args.airport_code)
 
     set_sim_speed(initial_sim_speed(args.config))
+    start_sim_speed_listener()
     cfg = load_airport_config(args.airport_code, args.config)
     runways = cfg["runways"]
 

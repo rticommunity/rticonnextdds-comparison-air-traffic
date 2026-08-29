@@ -32,6 +32,7 @@ from common import (
     now_ts,
     serve_stream,
     set_sim_speed,
+    start_sim_speed_listener,
     setup_logging,
     shutdown_event,
 )
@@ -424,6 +425,7 @@ def main():
     install_signal_handlers()
     AIRPORT_COORDS = load_airport_coords(args.config)
     set_sim_speed(initial_sim_speed(args.config))
+    start_sim_speed_listener()
 
     cfg = load_tracon_config(args.tracon_id, args.config)
     controller_id = args.controller_id or f"APP-{args.tracon_id}"

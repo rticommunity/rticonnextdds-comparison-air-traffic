@@ -174,6 +174,42 @@ def get_sim_speed() -> float:
         return _sim_speed
 
 
+def start_sim_speed_listener() -> None:
+    """Follow live speed updates from the dashboard's control service."""
+    def listen():
+        # Import lazily to keep this shared module independent of generated
+        # bindings during type generation and other utility-only use.
+        import air_traffic_types_pb2 as pb
+        import air_traffic_types_pb2_grpc as pb_grpc
+
+        discovery = DiscoveryManager(browse_roles=["control"])
+        try:
+            while not shutdown_event.is_set():
+                endpoint = discovery.get_endpoint("control", "dashboard")
+                if endpoint is None:
+                    shutdown_event.wait(1.0)
+                    continue
+
+                channel = grpc.insecure_channel(f"{endpoint[0]}:{endpoint[1]}")
+                try:
+                    stub = pb_grpc.SimulationControlServiceStub(channel)
+                    for update in stub.WatchSimulationSpeed(
+                        pb.EmptyFilter(), timeout=600,
+                    ):
+                        set_sim_speed(update.multiplier)
+                        if shutdown_event.is_set():
+                            break
+                except grpc.RpcError:
+                    if not shutdown_event.is_set():
+                        shutdown_event.wait(1.0)
+                finally:
+                    channel.close()
+        finally:
+            discovery.close()
+
+    threading.Thread(target=listen, name="sim-speed-listener", daemon=True).start()
+
+
 def write_sim_speed(speed: float, config_path: str) -> None:
     """Persist sim speed into the scenario config JSON for restarts."""
     try:
@@ -232,6 +268,7 @@ SERVICE_TYPES = {
     "airport": "_atc-airport._tcp.local.",
     "fps": "_atc-fps._tcp.local.",
     "weather": "_atc-weather._tcp.local.",
+    "control": "_atc-control._tcp.local.",
 }
 
 

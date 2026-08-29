@@ -4,14 +4,15 @@
 #
 # Docker entrypoint for the ATC demo.
 #
-# Pass .env.local with --env-file. For DDS, also mount your RTI license file
-# into the container at /tmp/rti_license.dat.
+# The host-side run.sh helper loads .env.local, passes the CARTO key, and, for
+# DDS, stages the license identified by RTI_LICENSE_FILE under docker/.local
+# before mounting it at /tmp/rti_license.dat.
 #
 # Usage:
-#   docker run --env-file .env.local -v ./rti_license.dat:/tmp/rti_license.dat -p 8050:8050 atc-demo dds
-#   docker run --env-file .env.local -p 8050:8050 atc-demo grpc
-#   docker run --env-file .env.local -v ./rti_license.dat:/tmp/rti_license.dat -p 8050:8050 atc-demo dds dashboard
-#   docker run --env-file .env.local -p 8050:8050 atc-demo grpc dashboard
+#   ./docker/run.sh dds
+#   ./docker/run.sh grpc
+#   ./docker/run.sh dds dashboard
+#   ./docker/run.sh grpc dashboard
 set -euo pipefail
 
 # ── Select implementation ─────────────────────────────────────────────────
@@ -25,13 +26,13 @@ esac
 
 case "$IMPLEMENTATION" in
     dds)
-        # Prefer the standard container mount. This intentionally replaces a
+        # Prefer the standard container mount. This intentionally replaces the
         # host-only RTI_LICENSE_FILE path loaded from .env.local.
         if [[ -f /tmp/rti_license.dat ]]; then
             export RTI_LICENSE_FILE=/tmp/rti_license.dat
         elif [[ -z "${RTI_LICENSE_FILE:-}" ]]; then
             echo "ERROR: RTI license file not found."
-            echo "  Mount it with: -v ./rti_license.dat:/tmp/rti_license.dat"
+            echo "       Use docker/run.sh so RTI_LICENSE_FILE is mounted from .env.local."
             exit 1
         fi
         LAUNCHER=/app/connext_dds/scripts/demo_start.sh

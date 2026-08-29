@@ -192,7 +192,7 @@ class TowerServiceStub(object):
                 _registered_method=True)
         self.StreamRunwayStatus = channel.unary_stream(
                 '/national_air_traffic_control.TowerService/StreamRunwayStatus',
-                request_serializer=air__traffic__types__pb2.EmptyFilter.SerializeToString,
+                request_serializer=air__traffic__types__pb2.RunwayStatusFilter.SerializeToString,
                 response_deserializer=air__traffic__types__pb2.RunwayStatus.FromString,
                 _registered_method=True)
         self.SendHandoff = channel.unary_unary(
@@ -278,7 +278,7 @@ def add_TowerServiceServicer_to_server(servicer, server):
             ),
             'StreamRunwayStatus': grpc.unary_stream_rpc_method_handler(
                     servicer.StreamRunwayStatus,
-                    request_deserializer=air__traffic__types__pb2.EmptyFilter.FromString,
+                    request_deserializer=air__traffic__types__pb2.RunwayStatusFilter.FromString,
                     response_serializer=air__traffic__types__pb2.RunwayStatus.SerializeToString,
             ),
             'SendHandoff': grpc.unary_unary_rpc_method_handler(
@@ -448,7 +448,7 @@ class TowerService(object):
             request,
             target,
             '/national_air_traffic_control.TowerService/StreamRunwayStatus',
-            air__traffic__types__pb2.EmptyFilter.SerializeToString,
+            air__traffic__types__pb2.RunwayStatusFilter.SerializeToString,
             air__traffic__types__pb2.RunwayStatus.FromString,
             options,
             channel_credentials,
@@ -1085,7 +1085,7 @@ class AirportServiceStub(object):
                 _registered_method=True)
         self.StreamRunwayStatus = channel.unary_stream(
                 '/national_air_traffic_control.AirportService/StreamRunwayStatus',
-                request_serializer=air__traffic__types__pb2.EmptyFilter.SerializeToString,
+                request_serializer=air__traffic__types__pb2.RunwayStatusFilter.SerializeToString,
                 response_deserializer=air__traffic__types__pb2.RunwayStatus.FromString,
                 _registered_method=True)
         self.RequestGate = channel.unary_stream(
@@ -1127,7 +1127,7 @@ def add_AirportServiceServicer_to_server(servicer, server):
             ),
             'StreamRunwayStatus': grpc.unary_stream_rpc_method_handler(
                     servicer.StreamRunwayStatus,
-                    request_deserializer=air__traffic__types__pb2.EmptyFilter.FromString,
+                    request_deserializer=air__traffic__types__pb2.RunwayStatusFilter.FromString,
                     response_serializer=air__traffic__types__pb2.RunwayStatus.SerializeToString,
             ),
             'RequestGate': grpc.unary_stream_rpc_method_handler(
@@ -1189,7 +1189,7 @@ class AirportService(object):
             request,
             target,
             '/national_air_traffic_control.AirportService/StreamRunwayStatus',
-            air__traffic__types__pb2.EmptyFilter.SerializeToString,
+            air__traffic__types__pb2.RunwayStatusFilter.SerializeToString,
             air__traffic__types__pb2.RunwayStatus.FromString,
             options,
             channel_credentials,
@@ -1454,6 +1454,84 @@ class WeatherService(object):
             '/national_air_traffic_control.WeatherService/InjectCell',
             air__traffic__types__pb2.ConvectiveCell.SerializeToString,
             air__traffic__types__pb2.CellInjectionAck.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+
+class SimulationControlServiceStub(object):
+    """SimulationControlService — hosted by the dashboard. Every application
+    subscribes so UI speed changes reach already-running processes.
+    """
+
+    def __init__(self, channel):
+        """Constructor.
+
+        Args:
+            channel: A grpc.Channel.
+        """
+        self.WatchSimulationSpeed = channel.unary_stream(
+                '/national_air_traffic_control.SimulationControlService/WatchSimulationSpeed',
+                request_serializer=air__traffic__types__pb2.EmptyFilter.SerializeToString,
+                response_deserializer=air__traffic__types__pb2.SimulationSpeed.FromString,
+                _registered_method=True)
+
+
+class SimulationControlServiceServicer(object):
+    """SimulationControlService — hosted by the dashboard. Every application
+    subscribes so UI speed changes reach already-running processes.
+    """
+
+    def WatchSimulationSpeed(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+
+def add_SimulationControlServiceServicer_to_server(servicer, server):
+    rpc_method_handlers = {
+            'WatchSimulationSpeed': grpc.unary_stream_rpc_method_handler(
+                    servicer.WatchSimulationSpeed,
+                    request_deserializer=air__traffic__types__pb2.EmptyFilter.FromString,
+                    response_serializer=air__traffic__types__pb2.SimulationSpeed.SerializeToString,
+            ),
+    }
+    generic_handler = grpc.method_handlers_generic_handler(
+            'national_air_traffic_control.SimulationControlService', rpc_method_handlers)
+    server.add_generic_rpc_handlers((generic_handler,))
+    server.add_registered_method_handlers('national_air_traffic_control.SimulationControlService', rpc_method_handlers)
+
+
+ # This class is part of an EXPERIMENTAL API.
+class SimulationControlService(object):
+    """SimulationControlService — hosted by the dashboard. Every application
+    subscribes so UI speed changes reach already-running processes.
+    """
+
+    @staticmethod
+    def WatchSimulationSpeed(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_stream(
+            request,
+            target,
+            '/national_air_traffic_control.SimulationControlService/WatchSimulationSpeed',
+            air__traffic__types__pb2.EmptyFilter.SerializeToString,
+            air__traffic__types__pb2.SimulationSpeed.FromString,
             options,
             channel_credentials,
             insecure,

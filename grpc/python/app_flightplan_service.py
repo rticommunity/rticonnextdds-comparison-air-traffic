@@ -23,6 +23,7 @@ from common import (
     now_ts,
     serve_stream,
     set_sim_speed,
+    start_sim_speed_listener,
     setup_logging,
     shutdown_event,
 )
@@ -89,6 +90,7 @@ def main():
 
     install_signal_handlers()
     set_sim_speed(initial_sim_speed(args.config))
+    start_sim_speed_listener()
 
     servicer = FlightPlanServiceServicer()
     server, actual_port = create_grpc_server(args.port)

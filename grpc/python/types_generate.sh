@@ -8,6 +8,7 @@ REPO_ROOT="$(dirname "$GRPC_DIR")"
 python -m grpc_tools.protoc \
     -I "$GRPC_DIR" \
     --python_out="$GRPC_DIR/python" \
+    --pyi_out="$GRPC_DIR/python" \
     --grpc_python_out="$GRPC_DIR/python" \
     "$GRPC_DIR/air_traffic_types.proto"
 

@@ -348,12 +348,21 @@ message WeatherReportFilter {
     optional string airport_code = 1;             // specific airport or all
 }
 
+message RunwayStatusFilter {
+    optional string airport_code = 1;             // specific airport or all
+}
+
 message HandoffFilter {
     string controller_id = 1;                     // to_controller_id OR from_controller_id
 }
 
 // Generic empty request for unfiltered subscriptions
 message EmptyFilter {}
+
+// Current simulation-clock multiplier, broadcast by the dashboard.
+message SimulationSpeed {
+    double multiplier = 1;
+}
 
 // ─── Handoff Acknowledgment ────────────────────────────────
 
@@ -379,7 +388,7 @@ service TowerService {
     rpc StreamAlerts(EmptyFilter) returns (stream Alert);
     rpc StreamTracking(EmptyFilter) returns (stream AircraftTracking);
     rpc StreamFacilityStatus(EmptyFilter) returns (stream FacilityStatus);
-    rpc StreamRunwayStatus(EmptyFilter) returns (stream RunwayStatus);
+    rpc StreamRunwayStatus(RunwayStatusFilter) returns (stream RunwayStatus);
     rpc SendHandoff(Handoff) returns (HandoffAck);
 }
 
@@ -406,7 +415,7 @@ service CenterService {
 // AirportService — hosted by each airport.
 service AirportService {
     rpc StreamWeatherReports(WeatherReportFilter) returns (stream WeatherReport);
-    rpc StreamRunwayStatus(EmptyFilter) returns (stream RunwayStatus);
+    rpc StreamRunwayStatus(RunwayStatusFilter) returns (stream RunwayStatus);
     rpc RequestGate(GateRequest) returns (stream GateAssignmentReply);
 }
 
@@ -420,6 +429,12 @@ service FlightPlanService {
 service WeatherService {
     rpc StreamConvectiveCells(EmptyFilter) returns (stream ConvectiveCell);
     rpc InjectCell(ConvectiveCell) returns (CellInjectionAck);
+}
+
+// SimulationControlService — hosted by the dashboard. Every application
+// subscribes so UI speed changes reach already-running processes.
+service SimulationControlService {
+    rpc WatchSimulationSpeed(EmptyFilter) returns (stream SimulationSpeed);
 }
 
 message CellInjectionAck {
