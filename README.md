@@ -77,11 +77,11 @@ Aircraft fly between airports while control towers, TRACON facilities, and en-ro
 
 ### Connext DDS
 
-Built with RTI Connext DDS (Python). See [`connext_dds/`](connext_dds/) for the full implementation.
+Built with RTI Connext DDS (Python). See [`connext_dds/README.md`](connext_dds/README.md) for the full implementation.
 
 ### gRPC
 
-Built with gRPC + Protocol Buffers (Python). See [`grpc/`](grpc/) for the full implementation.
+Built with gRPC + Protocol Buffers (Python). See [`grpc/README.md`](grpc/README.md) for the full implementation.
 
 ## Comparison: How Do the Resulting Systems Differ?
 
@@ -245,12 +245,40 @@ Both approaches produce working demos. Only one is production-ready without addi
 
 ## Prerequisites
 
+### Dashboard basemap
+
+The DDS and gRPC dashboards use [CARTO basemaps](https://carto.com/basemaps/),
+which require a CARTO-issued API key. Keys are free within CARTO's fair-use
+limit of five million tile requests per calendar month. Request a key at
+[carto.com/basemaps/apikey](https://carto.com/basemaps/apikey/) and authorize
+`localhost` when prompted.
+
+For persistent local configuration, copy the provided template and edit it:
+
+```bash
+cp .env.example .env.local
+```
+
+Set `CARTO_BASEMAP_API_KEY` and, when using DDS, `RTI_LICENSE_FILE` in
+`.env.local`. The file is ignored by Git and loaded automatically by
+`setup.sourceme` and both demo launchers, so the values persist across terminal
+sessions without being committed. If `.env.local` is absent, values may still
+be exported directly in the shell.
+
+Do not commit your key. Every user or deployment must use its own key and
+comply with the [CARTO Basemaps Terms](https://carto.com/legal/basemap-terms/),
+including usage restrictions, the monthly fair-use limit, and attribution.
+Although the key is kept out of this repository, it is necessarily visible to
+dashboard users in browser tile requests. Configure domain restrictions and
+usage limits with CARTO, and monitor the key for abuse.
+
 ### Connext DDS
 
 - **RTI Connext DDS license file** (no Connext installation required — the Python
   package is installed automatically from PyPI).
   A free evaluation license is available at [rti.com/free-trial](https://www.rti.com/free-trial).
-  Set `RTI_LICENSE_FILE` to point to your license file before running the demo.
+     Set `RTI_LICENSE_FILE` in `.env.local` to point to your license file before
+     running the demo.
 - Python 3.10+
 
 ### gRPC
@@ -292,25 +320,54 @@ source setup.sourceme
 # Build the image (from repo root)
 docker build -f docker/Dockerfile -t atc-demo .
 
-# Run the full demo (all components)
-docker run -v ./rti_license.dat:/tmp/rti_license.dat -p 8050:8050 atc-demo
+# Run the DDS demo (all components; RTI license required)
+docker run --env-file .env.local \
+     -v ./rti_license.dat:/tmp/rti_license.dat \
+     -p 8050:8050 atc-demo dds
 
-# Run a single component
-docker run -v ./rti_license.dat:/tmp/rti_license.dat -p 8050:8050 atc-demo dashboard
+# Run the gRPC demo (all components; no RTI license required)
+docker run --env-file .env.local \
+     -p 8050:8050 atc-demo grpc
+
+# Run only the DDS dashboard
+docker run --env-file .env.local \
+     -v ./rti_license.dat:/tmp/rti_license.dat \
+     -p 8050:8050 atc-demo dds dashboard
+
+# Run only the gRPC dashboard
+docker run --env-file .env.local \
+     -p 8050:8050 atc-demo grpc dashboard
 ```
 
-`--network host` is recommended so DDS multicast discovery works between containers. Pass any component name (`dashboard`, `center`, `tower`, `tracon`, `airport`, `airplane`, `flightplan`, `weather`) or `all` (default). On Linux, add `--network host` for DDS discovery across multiple containers.
+Docker reads `CARTO_BASEMAP_API_KEY` from `.env.local` at runtime. The license
+is mounted separately because the `RTI_LICENSE_FILE` path in `.env.local`
+refers to the host; the container entrypoint uses `/tmp/rti_license.dat` for
+the mounted file. `.env.local` is excluded from both Git and the Docker build
+context and is never stored in the image.
 
-See [`connext_dds/README.md`](connext_dds/README.md) for prerequisites, installation, detailed options, and design notes.
+Select the implementation with the first argument, `dds` or `grpc`, followed
+optionally by a component name (`dashboard`, `center`, `tower`, `tracon`,
+`airport`, `airplane`, `flightplan`, `weather`) or `all` (the default). If the
+implementation argument is omitted, the image defaults to DDS for backward
+compatibility.
+
+`--network host` is recommended on Linux so DDS multicast discovery works
+across multiple containers.
+
+See the [DDS README](connext_dds/README.md) and [gRPC README](grpc/README.md)
+for implementation-specific prerequisites, commands, and design notes.
 
 ## Repository Structure
 
 ```
 ├── README.md                      # This file
+├── .env.example                   # Template for local credentials and settings
+├── .env.local                     # Local credentials/settings (created by user, Git-ignored)
 ├── air_traffic_scenario.json      # Shared scenario config (both implementations)
 ├── setup.sourceme                 # Environment setup (source, not execute)
 ├── requirements/
-│   └── connext_dds.txt            # Python dependencies (Connext DDS)
+│   ├── connext_dds.txt            # Python dependencies (Connext DDS)
+│   └── grpc.txt                   # Python dependencies (gRPC)
 ├── connext_dds/                   # RTI Connext DDS implementation
 │   ├── README.md                  # Approach overview & quick start
 │   ├── DESIGN.md                  # DDS architecture deep dive
@@ -321,6 +378,7 @@ See [`connext_dds/README.md`](connext_dds/README.md) for prerequisites, installa
 │   ├── python/                    # Python implementation
 │   └── cpp/                       # C++ implementation (planned)
 ├── grpc/                          # gRPC implementation
+│   ├── README.md                  # Approach overview & quick start
 │   ├── DESIGN.md                  # gRPC architecture deep dive
 │   ├── air_traffic_types.proto    # Shared Protocol Buffer definitions
 │   ├── scripts/                   # Demo launcher

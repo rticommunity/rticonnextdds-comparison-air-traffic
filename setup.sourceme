@@ -16,6 +16,15 @@ VENV_DIR="$PROJECT_DIR/venv"
 REQUIREMENTS_DDS="$PROJECT_DIR/requirements/connext_dds.txt"
 REQUIREMENTS_GRPC="$PROJECT_DIR/requirements/grpc.txt"
 
+# ── Persistent local configuration ─────────────────────────────────────────
+LOCAL_ENV_FILE="$PROJECT_DIR/.env.local"
+if [[ -f "$LOCAL_ENV_FILE" ]]; then
+    echo "Loading local configuration from $LOCAL_ENV_FILE"
+    set -a
+    source "$LOCAL_ENV_FILE"
+    set +a
+fi
+
 # ── Determine Python version ───────────────────────────────────────────────
 PYTHON="${PYTHON:-python3}"
 echo "Python: $("$PYTHON" --version)"

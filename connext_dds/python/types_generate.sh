@@ -43,5 +43,5 @@ echo "Using rtiddsgen: $RTIDDSGEN"
     "$IDL_FILE"
 
 echo ""
-echo "Generated: $OUTPUT_DIR/air_traffic.py"
+echo "Generated: $OUTPUT_DIR/air_traffic_types.py"
 echo "Done."

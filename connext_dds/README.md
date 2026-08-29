@@ -18,35 +18,55 @@ Implementation of the national ATC simulation using **RTI Connext DDS 7.7.0 Pro*
 ## File Inventory
 
 ```
-connext_dds/
-├── README.md                      # This file
-├── DESIGN.md                      # DDS architecture deep dive
-├── air_traffic_types.idl          # IDL4 type definitions (source of truth)
-├── air_traffic_qos.xml            # QoS profile library
-├── diagrams/                      # Design diagrams (referenced by DESIGN.md)
-├── scripts/
-│   ├── demo_start.sh              # Launch all apps
-│   ├── demo_stop.sh               # Stop all apps
-│   ├── demo_cli.py                # Scenario config parser (used by demo_start.sh)
-│   ├── collector_start.sh         # Start data collector
-│   └── collector_stop.sh          # Stop data collector
-├── python/                        # Python implementation
-│   ├── README.md                  # Python-specific setup
-│   ├── types_generate.sh          # rtiddsgen -language Python
-│   ├── common.py                  # Shared utilities
-│   ├── air_traffic.py             # Generated types (DO NOT HAND-EDIT)
-│   └── app_*.py                   # Application files (8 apps)
-└── cpp/                           # C++ implementation (planned)
+(repository root)
+├── .env.example                   # Template for local credentials and settings
+├── .env.local                     # User-created local settings (Git-ignored)
+└── connext_dds/
+  ├── README.md                  # This file
+  ├── DESIGN.md                  # DDS architecture deep dive
+  ├── air_traffic_types.idl      # IDL4 type definitions (source of truth)
+  ├── air_traffic_qos.xml        # QoS profile library
+  ├── diagrams/                  # Design diagrams (referenced by DESIGN.md)
+  ├── scripts/
+  │   ├── demo_start.sh          # Launch all apps
+  │   ├── demo_stop.sh           # Stop all apps
+  │   ├── demo_cli.py            # Scenario config parser (used by demo_start.sh)
+  │   ├── collector_start.sh     # Start data collector
+  │   └── collector_stop.sh      # Stop data collector
+  ├── python/                    # Python implementation
+  │   ├── README.md              # Python-specific setup
+  │   ├── types_generate.sh      # rtiddsgen -language Python
+  │   ├── common.py              # Shared utilities
+  │   ├── air_traffic_types.py   # Generated types (DO NOT HAND-EDIT)
+  │   └── app_*.py               # Application files (8 apps)
+  └── cpp/                       # C++ implementation (planned)
 ```
 
 ## Quick Start
 
 ### Prerequisites
 
-- **RTI Connext DDS license file** — set `RTI_LICENSE_FILE` before running.
+- **RTI Connext DDS license file** — set `RTI_LICENSE_FILE` in the repository's
+  `.env.local` file before running.
   No Connext installation required; the Python package is installed from PyPI.
 - Python 3.10+
 - Virtual environment set up via `source ../setup.sourceme`
+- A personal [CARTO basemap API key](https://carto.com/basemaps/apikey/) for the
+  dashboard. Keys are free within CARTO's fair-use limit of five million tile
+  requests per calendar month. Authorize `localhost`, then create the ignored
+  local configuration file from the repository root:
+
+  ```bash
+  cp .env.example .env.local
+  ```
+
+  Replace the placeholders for `CARTO_BASEMAP_API_KEY` and `RTI_LICENSE_FILE`.
+  The demo launcher loads this file automatically.
+
+  Each user must use their own key and comply with the
+  [CARTO Basemaps Terms](https://carto.com/legal/basemap-terms/). The key is
+  visible in browser tile requests, so configure domain restrictions and usage
+  limits and monitor it for abuse.
 
 ### Generate Types
 

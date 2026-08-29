@@ -383,6 +383,7 @@ def index():
         airports_json=_airports_js,
         centers_json=_centers_js,
         tracons_json=_tracons_js,
+    carto_api_key=app.config["carto_api_key"],
     )
 
 
@@ -1032,11 +1033,12 @@ document.getElementById("mouse-coords").addEventListener("click", function() {
   }
 });
 
-// CartoDB dark tiles — free, no API key
-L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
-  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/">CARTO</a>',
+// CARTO dark tiles. Each user must supply their own CARTO-issued API key.
+var CARTO_BASEMAP_API_KEY = {{ carto_api_key | tojson }};
+L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/dark_all/{z}/{x}/{y}{r}.png?key=" + encodeURIComponent(CARTO_BASEMAP_API_KEY), {
+  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>, &copy; <a href="https://carto.com/attributions">CARTO</a>',
   subdomains: "abcd",
-  maxZoom: 19
+  maxZoom: 20
 }).addTo(map);
 
 /* ── Airspace boundaries (injected from scenario config) ──────────── */
@@ -1808,8 +1810,16 @@ def main():
     parser.add_argument("--host", default="0.0.0.0", help="Bind address")
     args = parser.parse_args()
 
+    carto_api_key = os.environ.get("CARTO_BASEMAP_API_KEY", "").strip()
+    if not carto_api_key:
+      parser.error(
+        "CARTO_BASEMAP_API_KEY is required for the dashboard basemap. "
+        "Request your own key at https://carto.com/basemaps/apikey/"
+      )
+
     common.QOS_FILE = args.qos_file
     app.config["scenario_config"] = args.config
+    app.config["carto_api_key"] = carto_api_key
 
     # Load scenario config for airspace boundaries
     with open(args.config) as f:

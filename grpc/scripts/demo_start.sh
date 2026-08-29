@@ -40,6 +40,14 @@ PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO_DIR="$(cd "$PROJECT_DIR/.." && pwd)"
 PYTHON_DIR="$PROJECT_DIR/python"
 
+# ── Persistent local configuration ─────────────────────────────────────────
+LOCAL_ENV_FILE="$REPO_DIR/.env.local"
+if [[ -f "$LOCAL_ENV_FILE" ]]; then
+    set -a
+    source "$LOCAL_ENV_FILE"
+    set +a
+fi
+
 # ── Python from project venv ───────────────────────────────────────────────
 PYTHON="${PYTHON:-$REPO_DIR/venv/bin/python3}"
 if [[ ! -x "$PYTHON" ]]; then
@@ -78,6 +86,15 @@ wait_for_procs() {
     echo ""
     echo "Press Ctrl+C to stop."
     wait
+}
+
+require_carto_api_key() {
+    if [[ -z "${CARTO_BASEMAP_API_KEY:-}" ]]; then
+        echo "ERROR: CARTO_BASEMAP_API_KEY is not set."
+        echo "       Copy .env.example to .env.local and add your CARTO key."
+        echo "       Request a key at https://carto.com/basemaps/apikey/"
+        exit 1
+    fi
 }
 
 # ── Individual launch functions ─────────────────────────────────────────────
@@ -177,6 +194,7 @@ start_tracon() {
 
 start_dashboard() {
     local port="8050"
+    require_carto_api_key
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --port) port="$2"; shift 2 ;;
@@ -208,6 +226,7 @@ start_weather() {
 # ── "all" — full scenario ──────────────────────────────────────────────────
 
 start_all() {
+    require_carto_api_key
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --duration) DURATION="$2"; shift 2 ;;
